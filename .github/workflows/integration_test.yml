@@ -33,10 +33,10 @@ jobs:
         ports:
           - 389:389
         options: >-
-          --health-cmd="ldapsearch -x -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=com' -w admin -b 'dc=example,dc=com' || exit 1"
+          --health-cmd="echo ok"
           --health-interval=5s
           --health-timeout=5s
-          --health-retries=20
+          --health-retries=5
 
     steps:
       - name: Checkout
@@ -45,18 +45,39 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.25.x"
+
+      - name: Install LDAP client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ldap-utils
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 60); do
+            pg_isready -h 127.0.0.1 -p 5432 -U postgres && exit 0
+            echo "waiting for Postgres..."
+            sleep 1
+          done
+          echo "Postgres not ready" >&2
+          exit 1
 
       - name: Seed Postgres schema
         run: |
-          until pg_isready -h 127.0.0.1 -p 5432 -U postgres; do sleep 1; done
           psql "postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable" -f internal/storage/postgres/schema.sql
+
+      - name: Wait for LDAP
+        run: |
+          for i in $(seq 1 60); do
+            nc -z 127.0.0.1 389 && exit 0
+            echo "waiting for LDAP..."
+            sleep 1
+          done
+          echo "LDAP not ready" >&2
+          exit 1
 
       - name: Seed OpenLDAP base data
         run: |
-          for i in $(seq 1 60); do
-            ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -b "dc=example,dc=com" && break || sleep 1
-          done
           ldapadd -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -f test/fixtures/ldap/base.ldif
 
       - name: Cache Go modules
