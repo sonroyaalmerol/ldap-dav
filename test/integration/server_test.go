@@ -119,7 +119,8 @@ func TestIntegration(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 207 {
-			t.Fatalf("propfind principal status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("propfind principal status: %d body=%s", resp.StatusCode, string(b))
 		}
 	}
 
