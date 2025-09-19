@@ -3,11 +3,11 @@ package router
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
-
-	"github.com/go-chi/chi/v5"
 )
 
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
@@ -15,18 +15,17 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interfac
 
 	r.Get("/.well-known/caldav", h.HandleWellKnownCalDAV)
 
-	r.Route(cfg.HTTP.BasePath, func(r chi.Router) {
-		r.Options("/*", h.HandleOptions)
-		r.Use(authn.Middleware)
-
-		r.Handle("/principals/*", h)
-		r.Handle("/calendars/*", h)
-		r.Handle("/*", h)
+	r.Route(cfg.HTTP.BasePath, func(sr chi.Router) {
+		sr.Use(authn.Middleware)
+		sr.Options("/*", h.HandleOptions)
+		sr.Handle("/principals/*", h)
+		sr.Handle("/calendars/*", h)
+		sr.Handle("/*", h)
 	})
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	return r
