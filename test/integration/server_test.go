@@ -66,14 +66,29 @@ func TestIntegration(t *testing.T) {
 
 	// .well-known redirect
 	{
+		redirClient := &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Prevent following redirects; return the initial response as-is.
+				return http.ErrUseLastResponse
+			},
+		}
 		req, _ := http.NewRequest("GET", baseURL+"/.well-known/caldav", nil)
-		resp, err := client.Do(req)
+		resp, err := redirClient.Do(req)
 		if err != nil {
 			t.Fatalf("well-known: %v", err)
 		}
 		_ = resp.Body.Close()
+
 		if resp.StatusCode != http.StatusPermanentRedirect && resp.StatusCode != http.StatusMovedPermanently {
 			t.Fatalf("well-known status: %d", resp.StatusCode)
+		}
+		loc := resp.Header.Get("Location")
+		if loc == "" {
+			t.Fatalf("well-known missing Location header")
+		}
+		if loc != "/dav/" && loc != (basePath+"/") {
+			t.Logf("well-known Location: %s", loc)
 		}
 	}
 
