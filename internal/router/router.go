@@ -1,85 +1,95 @@
 package router
 
 import (
+	"errors"
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
+	"strings"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 )
 
-func handlerWrapper(handler func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
-	return http.HandlerFunc(handler)
-}
-
-func headHandler(handler func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rw := &headResponseWriter{ResponseWriter: w}
-		handler(rw, r)
-	})
-}
-
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
-	r := chi.NewRouter()
+	mux := http.NewServeMux()
 
-	r.Get("/.well-known/caldav", h.HandleWellKnownCalDAV)
+	mux.HandleFunc("/.well-known/caldav", h.HandleWellKnownCalDAV)
 
-	r.Route(cfg.HTTP.BasePath, func(sr chi.Router) {
-		sr.Use(authn.Middleware)
-		sr.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Advertise capabilities for any DAV subtree request
-				w.Header().Set("DAV", "1, 3, access-control, calendar-access")
-				next.ServeHTTP(w, r)
-			})
-		})
-
-		// OPTIONS for any DAV path
-		sr.MethodFunc("OPTIONS", "/*", h.HandleOptions)
-
-		// Principals subtree
-		sr.Route("/principals", func(pr chi.Router) {
-			pr.MethodFunc("PROPFIND", "/*", handlerWrapper(h.HandlePropfind))
-			pr.MethodFunc("REPORT", "/*", handlerWrapper(h.HandleReport))
-			pr.MethodFunc("GET", "/*", handlerWrapper(h.HandleGet))
-			pr.MethodFunc("HEAD", "/*", headHandler(h.HandleGet))
-			pr.MethodFunc("PUT", "/*", handlerWrapper(h.HandlePut))
-			pr.MethodFunc("DELETE", "/*", handlerWrapper(h.HandleDelete))
-			pr.MethodFunc("MKCOL", "/*", handlerWrapper(h.HandleMkcol))
-			pr.MethodFunc("PROPPATCH", "/*", handlerWrapper(h.HandleProppatch))
-			pr.MethodFunc("ACL", "/*", handlerWrapper(h.HandleACL))
-		})
-
-		// Calendars subtree
-		sr.Route("/calendars", func(pr chi.Router) {
-			pr.MethodFunc("PROPFIND", "/*", handlerWrapper(h.HandlePropfind))
-			pr.MethodFunc("REPORT", "/*", handlerWrapper(h.HandleReport))
-			pr.MethodFunc("GET", "/*", handlerWrapper(h.HandleGet))
-			pr.MethodFunc("HEAD", "/*", headHandler(h.HandleGet))
-			pr.MethodFunc("PUT", "/*", handlerWrapper(h.HandlePut))
-			pr.MethodFunc("DELETE", "/*", handlerWrapper(h.HandleDelete))
-			pr.MethodFunc("MKCOL", "/*", handlerWrapper(h.HandleMkcol))
-			pr.MethodFunc("PROPPATCH", "/*", handlerWrapper(h.HandleProppatch))
-			pr.MethodFunc("ACL", "/*", handlerWrapper(h.HandleACL))
-		})
-
-		sr.MethodFunc("PROPFIND", "/*", handlerWrapper(h.HandlePropfind))
-		sr.MethodFunc("REPORT", "/*", handlerWrapper(h.HandleReport))
-		sr.MethodFunc("GET", "/*", handlerWrapper(h.HandleGet))
-		sr.MethodFunc("HEAD", "/*", headHandler(h.HandleGet))
-		sr.MethodFunc("PUT", "/*", handlerWrapper(h.HandlePut))
-		sr.MethodFunc("DELETE", "/*", handlerWrapper(h.HandleDelete))
-		sr.MethodFunc("MKCOL", "/*", handlerWrapper(h.HandleMkcol))
-		sr.MethodFunc("PROPPATCH", "/*", handlerWrapper(h.HandleProppatch))
-		sr.MethodFunc("ACL", "/*", handlerWrapper(h.HandleACL))
-	})
-
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	return r
+	base := cfg.HTTP.BasePath
+	if base == "" || base[0] != '/' {
+		base = "/dav"
+	}
+	if !strings.HasSuffix(base, "/") {
+		base += "/"
+	}
+
+	// DAV subtree
+	mux.HandleFunc(base, func(w http.ResponseWriter, r *http.Request) {
+		// Always advertise DAV capabilities under DAV subtree
+		w.Header().Set("DAV", "1, 3, access-control, calendar-access")
+
+		// OPTIONS is public for capability discovery
+		if r.Method == http.MethodOptions {
+			h.HandleOptions(w, r)
+			return
+		}
+
+		// Authenticate others (Basic/Bearer). Allow missing Authorization only if Basic is enabled (for browser prompt).
+		p, err := authenticate(authn, r)
+		if err != nil || p == nil {
+			w.Header().Set("WWW-Authenticate", `Basic realm="CalDAV", charset="UTF-8"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		r = r.WithContext(auth.WithPrincipal(r.Context(), p))
+
+		switch r.Method {
+		case "PROPFIND":
+			h.HandlePropfind(w, r)
+		case "REPORT":
+			h.HandleReport(w, r)
+		case http.MethodGet:
+			h.HandleGet(w, r)
+		case http.MethodHead:
+			hrw := &headResponseWriter{ResponseWriter: w}
+			h.HandleGet(hrw, r)
+		case http.MethodPut:
+			h.HandlePut(w, r)
+		case http.MethodDelete:
+			h.HandleDelete(w, r)
+		case "MKCOL":
+			h.HandleMkcol(w, r)
+		case "PROPPATCH":
+			h.HandleProppatch(w, r)
+		case "ACL":
+			h.HandleACL(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	return mux
+}
+
+// authenticate reproduces the Chain.Middleware logic without writing to the ResponseWriter.
+func authenticate(chain *auth.Chain, r *http.Request) (*auth.Principal, error) {
+	authz := r.Header.Get("Authorization")
+	lower := strings.ToLower(authz)
+
+	// Prefer Bearer if present and enabled
+	if strings.HasPrefix(lower, "bearer ") && chain.BearerEnabled() {
+		return chain.BearerAuthenticate(r.Context(), strings.TrimSpace(authz[7:]))
+	}
+
+	// Basic when header present or allowed for prompt
+	if chain.BasicEnabled() {
+		return chain.BasicAuthenticate(r.Context(), authz)
+	}
+
+	return nil, errors.New("no auth")
 }

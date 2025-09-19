@@ -2,8 +2,7 @@ package auth
 
 import (
 	"context"
-	"net/http"
-	"strings"
+	"errors"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
@@ -54,33 +53,19 @@ func NewChain(cfg *config.Config, dir directory.Directory, logger zerolog.Logger
 	return c
 }
 
-func (c *Chain) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow unauthenticated OPTIONS to proceed for capability discovery
-		if r.Method == "OPTIONS" {
-			next.ServeHTTP(w, r)
-			return
-		}
+func (c *Chain) BasicEnabled() bool  { return c.basic != nil }
+func (c *Chain) BearerEnabled() bool { return c.bearer != nil }
 
-		authz := r.Header.Get("Authorization")
-		var p *Principal
-		var err error
+func (c *Chain) BasicAuthenticate(ctx context.Context, header string) (*Principal, error) {
+	if c.basic == nil {
+		return nil, errors.New("basic disabled")
+	}
+	return c.basic.Authenticate(ctx, header)
+}
 
-		if authz != "" && strings.HasPrefix(strings.ToLower(authz), "bearer ") && c.bearer != nil {
-			p, err = c.bearer.Authenticate(r.Context(), strings.TrimSpace(authz[7:]))
-		} else if authz != "" && strings.HasPrefix(strings.ToLower(authz), "basic ") && c.basic != nil {
-			p, err = c.basic.Authenticate(r.Context(), authz)
-		} else if c.basic != nil {
-			// allow Basic via browser dialog
-			p, err = c.basic.Authenticate(r.Context(), authz)
-		}
-
-		if err != nil || p == nil {
-			w.Header().Set("WWW-Authenticate", `Basic realm="CalDAV", charset="UTF-8"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
-	})
+func (c *Chain) BearerAuthenticate(ctx context.Context, token string) (*Principal, error) {
+	if c.bearer == nil {
+		return nil, errors.New("bearer disabled")
+	}
+	return c.bearer.Authenticate(ctx, token)
 }
