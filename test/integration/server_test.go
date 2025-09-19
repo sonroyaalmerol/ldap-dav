@@ -110,7 +110,8 @@ func TestIntegration(t *testing.T) {
 	// Basic auth principal/home
 	authz := basicAuth("alice", "password")
 	{
-		req, _ := http.NewRequest("PROPFIND", baseURL+basePath+"/principals/users/alice", nil)
+		url := baseURL + basePath + "/principals/users/alice"
+		req, _ := http.NewRequest("PROPFIND", url, nil)
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Depth", "0")
 		resp, err := client.Do(req)
@@ -120,13 +121,14 @@ func TestIntegration(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.StatusCode != 207 {
 			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("propfind principal status: %d body=%s", resp.StatusCode, string(b))
+			t.Fatalf("propfind principal status at %s: %d body=%s", url, resp.StatusCode, string(b))
 		}
 	}
 
 	// Calendar home listing
 	{
-		req, _ := http.NewRequest("PROPFIND", baseURL+basePath+"/calendars/alice/", nil)
+		url := baseURL + basePath + "/calendars/alice/"
+		req, _ := http.NewRequest("PROPFIND", url, nil)
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Depth", "1")
 		resp, err := client.Do(req)
@@ -136,7 +138,7 @@ func TestIntegration(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.StatusCode != 207 {
 			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("propfind home status: %d body=%s", resp.StatusCode, string(b))
+			t.Fatalf("propfind home status at %s: %d body=%s", url, resp.StatusCode, string(b))
 		}
 	}
 
