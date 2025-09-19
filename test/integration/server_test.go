@@ -8,22 +8,24 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 )
 
-func waitPort(t *testing.T, addr string, timeout time.Duration) {
+func waitPort(t *testing.T, hostPort string, timeout time.Duration) {
+	t.Helper()
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", hostPort, 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
 			return
 		}
+		lastErr = err
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("port %s not ready within %v", addr, timeout)
+	t.Fatalf("port %s not ready within %v (last err: %v)", hostPort, timeout, lastErr)
 }
 
 func basicAuth(user, pass string) string {
@@ -36,16 +38,16 @@ func TestIntegration(t *testing.T) {
 	if httpAddr == "" {
 		httpAddr = ":8081"
 	}
-	baseURL := "http://127.0.0.1" + httpAddr
+	hostPort := "127.0.0.1" + httpAddr // e.g., 127.0.0.1:8081
+	baseURL := "http://" + hostPort
 	basePath := os.Getenv("HTTP_BASE_PATH")
 	if basePath == "" {
 		basePath = "/dav"
 	}
 
-	// Start server subprocess
+	// Start server subprocess (inherits env)
 	cmd := exec.Command("/usr/local/bin/ldap-dav")
 	cmd.Env = os.Environ()
-
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -56,32 +58,35 @@ func TestIntegration(t *testing.T) {
 		_ = cmd.Wait()
 	}()
 
-	waitPort(t, strings.TrimPrefix(httpAddr, ":"), 10*time.Second) // INFO: using :PORT, Dial expects host:port; we used 127.0.0.1 concatenation above.
+	// Give it a moment to begin binding, then wait for port
+	time.Sleep(200 * time.Millisecond)
+	waitPort(t, hostPort, 10*time.Second)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	// .well-known redirect
 	{
-		req, _ := http.NewRequest("GET", "http://127.0.0.1"+httpAddr+"/.well-known/caldav", nil)
+		req, _ := http.NewRequest("GET", baseURL+"/.well-known/caldav", nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("well-known: %v", err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != 308 && resp.StatusCode != 301 {
+		if resp.StatusCode != http.StatusPermanentRedirect && resp.StatusCode != http.StatusMovedPermanently {
 			t.Fatalf("well-known status: %d", resp.StatusCode)
 		}
 	}
 
 	// OPTIONS
 	{
-		req, _ := http.NewRequest("OPTIONS", "http://127.0.0.1"+httpAddr+basePath+"/", nil)
+		req, _ := http.NewRequest("OPTIONS", baseURL+basePath+"/", nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("options: %v", err)
 		}
 		_ = resp.Body.Close()
-		if got := resp.Header.Get("DAV"); !strings.Contains(got, "calendar-access") {
+		got := resp.Header.Get("DAV")
+		if got == "" || !bytes.Contains([]byte(got), []byte("calendar-access")) {
 			t.Fatalf("DAV header missing calendar-access: %q", got)
 		}
 	}
