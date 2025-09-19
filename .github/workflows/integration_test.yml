@@ -76,6 +76,12 @@ jobs:
           echo "LDAP not ready" >&2
           exit 1
 
+      - name: Load CalDAV schema
+        run: |
+          LDAP_CID=$(docker ps -q --filter "ancestor=osixia/openldap:1.5.0")
+          docker cp test/fixtures/ldap/caldav-schema.ldif $LDAP_CID:/tmp/caldav-schema.ldif
+          docker exec $LDAP_CID ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/caldav-schema.ldif || true
+
       - name: Seed OpenLDAP base data (idempotent)
         run: |
           # Verify bind works
