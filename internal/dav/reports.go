@@ -63,7 +63,7 @@ type freeBusyQuery struct {
 	Time    *timeRange `xml:"time-range"`
 }
 
-func (h *Handlers) handleReport(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	_ = r.Body.Close()
 

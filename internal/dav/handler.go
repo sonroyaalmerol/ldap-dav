@@ -37,33 +37,6 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 	}
 }
 
-func (h *Handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "PROPFIND":
-		h.handlePropfind(w, r)
-	case "REPORT":
-		h.handleReport(w, r)
-	case "GET":
-		h.handleGet(w, r)
-	case "HEAD":
-		// Reuse GET headers, no body
-		rw := &headResponseWriter{ResponseWriter: w}
-		h.handleGet(rw, r)
-	case "PUT":
-		h.handlePut(w, r)
-	case "DELETE":
-		h.handleDelete(w, r)
-	case "MKCOL":
-		h.handleMkcol(w, r)
-	case "PROPPATCH":
-		h.handleProppatch(w, r)
-	case "ACL":
-		h.handleACL(w, r)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
 func (h *Handlers) principalURL(uid string) string {
 	return joinURL(h.basePath, "principals", "users", uid)
 }
@@ -249,8 +222,3 @@ func (h *Handlers) buildReadOnlyACL(r *http.Request, calURI, ownerUID string) *a
 	}
 }
 
-type headResponseWriter struct {
-	http.ResponseWriter
-}
-
-func (hrw *headResponseWriter) Write(b []byte) (int, error) { return len(b), nil }

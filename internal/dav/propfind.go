@@ -11,7 +11,7 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
-func (h *Handlers) handlePropfind(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 	depth := r.Header.Get("Depth")
 	if depth == "" {
 		depth = "0"

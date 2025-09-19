@@ -15,8 +15,8 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
-// handleGet returns the raw iCalendar object by UID path.
-func (h *Handlers) handleGet(w http.ResponseWriter, r *http.Request) {
+// HandleGet returns the raw iCalendar object by UID path.
+func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
@@ -59,8 +59,8 @@ func (h *Handlers) handleGet(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, obj.Data)
 }
 
-// handlePut creates or updates an iCalendar object and detects its component type.
-func (h *Handlers) handlePut(w http.ResponseWriter, r *http.Request) {
+// HandlePut creates or updates an iCalendar object and detects its component type.
+func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
@@ -156,8 +156,8 @@ func (h *Handlers) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleDelete removes an iCalendar object by UID (respecting If-Match) and records a change.
-func (h *Handlers) handleDelete(w http.ResponseWriter, r *http.Request) {
+// HandleDelete removes an iCalendar object by UID (respecting If-Match) and records a change.
+func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
@@ -194,7 +194,7 @@ func (h *Handlers) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handlers) handleMkcol(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
@@ -208,7 +208,7 @@ func (h *Handlers) handleMkcol(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "MKCOL not supported; provision calendars in storage", http.StatusForbidden)
 }
 
-func (h *Handlers) handleProppatch(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
@@ -263,7 +263,7 @@ func (h *Handlers) handleProppatch(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><d:multistatus xmlns:d="DAV:"><d:response><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>`)
 }
 
-func (h *Handlers) handleACL(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) HandleACL(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "ACLs managed via LDAP groups", http.StatusForbidden)
 }
 
