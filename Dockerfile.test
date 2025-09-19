@@ -1,0 +1,16 @@
+FROM golang:1.25 as builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /usr/local/bin/ldap-dav ./cmd/ldap-dav
+RUN CGO_ENABLED=0 go build -o /usr/local/bin/ldap-dav-bootstrap ./cmd/ldap-dav-bootstrap
+# Keep source for `go test`
+# go toolchain is present
+
+FROM golang:1.25
+WORKDIR /app
+COPY --from=builder /usr/local/bin/ldap-dav /usr/local/bin/ldap-dav
+COPY --from=builder /usr/local/bin/ldap-dav-bootstrap /usr/local/bin/ldap-dav-bootstrap
+COPY . .
+ENV GO111MODULE=on

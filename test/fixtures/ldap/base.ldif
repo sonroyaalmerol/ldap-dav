@@ -1,0 +1,43 @@
+dn: dc=example,dc=com
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Example Inc
+dc: example
+
+dn: ou=People,dc=example,dc=com
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Groups
+
+dn: uid=alice,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: Alice
+sn: Liddell
+uid: alice
+mail: alice@example.com
+userPassword: password
+
+dn: uid=bob,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: Bob
+sn: Builder
+uid: bob
+mail: bob@example.com
+userPassword: password
+
+dn: cn=team-cal-readers,ou=Groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: team-cal-readers
+member: uid=alice,ou=People,dc=example,dc=com
+caldavCalendars: team
+caldavPrivileges: read
+
+dn: cn=team-cal-editors,ou=Groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: team-cal-editors
+member: uid=alice,ou=People,dc=example,dc=com
+caldavBindings: calendar-id=team;priv=read,edit,write,bind,unbind

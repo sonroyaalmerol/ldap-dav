@@ -1,0 +1,53 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
+)
+
+func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, description string) error {
+	ctx := context.Background()
+
+	id := c.ID
+	if id == "" {
+		id = uuid.New().String()
+	}
+	ownerUser := c.OwnerUserID
+	if ownerUser == "" {
+		return fmt.Errorf("OwnerUserID required")
+	}
+	uri := c.URI
+	if uri == "" {
+		return fmt.Errorf("URI required")
+	}
+	displayName := c.DisplayName
+	ctag := c.CTag
+	if ctag == "" {
+		ctag = uuid.New().String()
+	}
+	now := time.Now().UTC()
+
+	grp := ownerGroup
+	if grp == "" {
+		grp = c.OwnerGroup
+	}
+	desc := description
+	if desc == "" {
+		desc = c.Description
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		insert into calendars (
+		  id, owner_user_id, owner_group, uri, display_name, description,
+		  ctag, created_at, updated_at, sync_seq, sync_token
+		) values (
+		  $1::uuid, $2, $3, $4, $5, $6,
+		  $7, $8, $8, 0, 'seq:0'
+		)
+	`, id, ownerUser, grp, uri, displayName, desc, ctag, now)
+	return err
+}

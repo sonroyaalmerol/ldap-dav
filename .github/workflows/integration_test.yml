@@ -1,0 +1,189 @@
+name: Integration Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: ["*"]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: caldav
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      ldap:
+        image: osixia/openldap:1.5.0
+        env:
+          LDAP_ORGANISATION: "Example Inc"
+          LDAP_DOMAIN: "example.com"
+          LDAP_ADMIN_PASSWORD: admin
+        ports:
+          - 389:389
+        options: >-
+          --health-cmd="ldapsearch -x -H ldap://localhost:389 -D 'cn=admin,dc=example,dc=com' -w admin -b 'dc=example,dc=com' || exit 1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      jwks:
+        image: caddy:2.7.6
+        ports:
+          - 8085:8080
+        options: >-
+          --health-cmd="wget -qO- http://localhost:8080/jwks.json >/dev/null || exit 1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Seed Postgres schema
+        run: |
+          until pg_isready -h 127.0.0.1 -p 5432 -U postgres; do sleep 1; done
+          psql "postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable" -f internal/storage/postgres/schema.sql
+
+      - name: Seed OpenLDAP base data
+        run: |
+          # Wait for LDAP service
+          for i in $(seq 1 60); do
+            ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -b "dc=example,dc=com" && break || sleep 1
+          done
+          ldapadd -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -f test/fixtures/ldap/base.ldif
+
+      - name: Prepare JWKS files
+        run: |
+          sudo mkdir -p /srv
+          sudo cp test/fixtures/jwks/jwks.json /srv/jwks.json
+          sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
+          :8080 {
+            encode zstd gzip
+            root * /srv
+            file_server
+          }
+          EOF
+          # Restart jwks service with the config (service is managed by Actions, cannot restart; we’ll just rely on the pre-baked service and not use the caddy config here)
+          # This step ensures the file exists for the healthcheck.
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build test runner image
+        run: |
+          docker build -f Dockerfile.test -t ldap-dav-test .
+
+      - name: Bootstrap calendars (postgres)
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE=postgres \
+            -e PG_URL="postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable" \
+            -e HTTP_BASE_PATH="/dav" \
+            ldap-dav-test \
+            ldap-dav-bootstrap -owner alice -uri personal -display "Alice Personal"
+          docker run --rm --network host \
+            -e STORAGE_TYPE=postgres \
+            -e PG_URL="postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable" \
+            -e HTTP_BASE_PATH="/dav" \
+            ldap-dav-test \
+            ldap-dav-bootstrap -owner bob -uri team -display "Team Calendar"
+
+      - name: Run integration tests (postgres backend)
+        env:
+          STORAGE_TYPE: postgres
+          PG_URL: postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable
+          LDAP_URL: ldap://127.0.0.1:389
+          LDAP_BIND_DN: cn=admin,dc=example,dc=com
+          LDAP_BIND_PASSWORD: admin
+          LDAP_USER_BASE_DN: ou=People,dc=example,dc=com
+          LDAP_GROUP_BASE_DN: ou=Groups,dc=example,dc=com
+          AUTH_BASIC: "true"
+          AUTH_BEARER: "false"
+          HTTP_BASE_PATH: /dav
+          HTTP_ADDR: :8081
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE \
+            -e PG_URL \
+            -e LDAP_URL \
+            -e LDAP_BIND_DN \
+            -e LDAP_BIND_PASSWORD \
+            -e LDAP_USER_BASE_DN \
+            -e LDAP_GROUP_BASE_DN \
+            -e AUTH_BASIC \
+            -e AUTH_BEARER \
+            -e HTTP_BASE_PATH \
+            -e HTTP_ADDR \
+            ldap-dav-test \
+            go test ./test/integration -v -run TestIntegration
+
+      - name: Bootstrap calendars (filestore)
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE=filestore \
+            -e FILE_ROOT="/tmp/ldap-dav-data" \
+            -e HTTP_BASE_PATH="/dav" \
+            -v /tmp/ldap-dav-data:/tmp/ldap-dav-data \
+            ldap-dav-test \
+            ldap-dav-bootstrap -owner alice -uri personal -display "Alice Personal"
+          docker run --rm --network host \
+            -e STORAGE_TYPE=filestore \
+            -e FILE_ROOT="/tmp/ldap-dav-data" \
+            -e HTTP_BASE_PATH="/dav" \
+            -v /tmp/ldap-dav-data:/tmp/ldap-dav-data \
+            ldap-dav-test \
+            ldap-dav-bootstrap -owner bob -uri team -display "Team Calendar"
+
+      - name: Run integration tests (filestore backend)
+        env:
+          STORAGE_TYPE: filestore
+          FILE_ROOT: /tmp/ldap-dav-data
+          LDAP_URL: ldap://127.0.0.1:389
+          LDAP_BIND_DN: cn=admin,dc=example,dc=com
+          LDAP_BIND_PASSWORD: admin
+          LDAP_USER_BASE_DN: ou=People,dc=example,dc=com
+          LDAP_GROUP_BASE_DN: ou=Groups,dc=example,dc=com
+          AUTH_BASIC: "true"
+          AUTH_BEARER: "false"
+          HTTP_BASE_PATH: /dav
+          HTTP_ADDR: :8082
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE \
+            -e FILE_ROOT \
+            -e LDAP_URL \
+            -e LDAP_BIND_DN \
+            -e LDAP_BIND_PASSWORD \
+            -e LDAP_USER_BASE_DN \
+            -e LDAP_GROUP_BASE_DN \
+            -e AUTH_BASIC \
+            -e AUTH_BEARER \
+            -e HTTP_BASE_PATH \
+            -e HTTP_ADDR \
+            -v /tmp/ldap-dav-data:/tmp/ldap-dav-data \
+            ldap-dav-test \
+            go test ./test/integration -v -run TestIntegration
