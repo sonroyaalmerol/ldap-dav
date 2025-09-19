@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -100,7 +101,7 @@ func writeMultiStatus(w http.ResponseWriter, ms multistatus) {
 	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "  ")
 	if err := enc.Encode(ms); err != nil {
-		http.Error(w, "xml encode error", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("xml encode error: %v", err), http.StatusInternalServerError)
 		return
 	}
 	_ = enc.Flush()
