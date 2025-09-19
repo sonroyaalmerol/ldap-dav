@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
-    branches: ["*"]
+    branches: ['*']
 
 jobs:
   integration:
@@ -37,15 +37,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
-      jwks:
-        image: caddy:2.7.6
-        ports:
-          - 8085:8080
-        options: >-
-          --health-cmd="wget -qO- http://localhost:8080/jwks.json >/dev/null || exit 1"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
 
     steps:
       - name: Checkout
@@ -63,25 +54,10 @@ jobs:
 
       - name: Seed OpenLDAP base data
         run: |
-          # Wait for LDAP service
           for i in $(seq 1 60); do
             ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -b "dc=example,dc=com" && break || sleep 1
           done
           ldapadd -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -f test/fixtures/ldap/base.ldif
-
-      - name: Prepare JWKS files
-        run: |
-          sudo mkdir -p /srv
-          sudo cp test/fixtures/jwks/jwks.json /srv/jwks.json
-          sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
-          :8080 {
-            encode zstd gzip
-            root * /srv
-            file_server
-          }
-          EOF
-          # Restart jwks service with the config (service is managed by Actions, cannot restart; we’ll just rely on the pre-baked service and not use the caddy config here)
-          # This step ensures the file exists for the healthcheck.
 
       - name: Cache Go modules
         uses: actions/cache@v4
