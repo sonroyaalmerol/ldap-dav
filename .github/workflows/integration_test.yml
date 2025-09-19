@@ -47,10 +47,10 @@ jobs:
         with:
           go-version: "1.25.x"
 
-      - name: Install LDAP client tools
+      - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ldap-utils
+          sudo apt-get install -y ldap-utils netcat-traditional
 
       - name: Wait for Postgres
         run: |
@@ -76,9 +76,22 @@ jobs:
           echo "LDAP not ready" >&2
           exit 1
 
-      - name: Seed OpenLDAP base data
+      - name: Seed OpenLDAP base data (idempotent)
         run: |
-          ldapadd -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin -f test/fixtures/ldap/base.ldif
+          # Verify bind works
+          for i in $(seq 1 60); do
+            if ldapwhoami -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=example,dc=com" -w admin >/dev/null 2>&1; then
+              break
+            fi
+            echo "waiting for LDAP bind..."
+            sleep 1
+          done
+          # Idempotent add: continue on "already exists"
+          ldapmodify -a -c -x \
+            -H ldap://127.0.0.1:389 \
+            -D "cn=admin,dc=example,dc=com" \
+            -w admin \
+            -f test/fixtures/ldap/base.ldif || true
 
       - name: Cache Go modules
         uses: actions/cache@v4
