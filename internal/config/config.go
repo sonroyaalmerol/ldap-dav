@@ -90,7 +90,7 @@ func Load() (*Config, error) {
 			MemberAttr:         getenv("LDAP_MEMBER_ATTR", "member"),
 			CalendarIDsAttr:    getenv("LDAP_CAL_IDS_ATTR", "caldavCalendars"),
 			PrivilegesAttr:     getenv("LDAP_PRIVS_ATTR", "caldavPrivileges"),
-			BindingsAttr:       getenv("LDAP_BINDINGS_ATTR", ""),
+			BindingsAttr:       getenv("LDAP_BINDINGS_ATTR", "caldavBindings"),
 			TokenUserAttr:      getenv("LDAP_TOKEN_USER_ATTR", "uid"),
 			EnableNestedGroups: getenv("LDAP_NESTED", "false") == "true",
 			MaxGroupDepth:      3,
