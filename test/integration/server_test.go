@@ -145,7 +145,8 @@ func TestIntegration(t *testing.T) {
 	// PUT event into bob/team as alice (should be allowed via editors group)
 	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20250101T100000Z\r\nDTEND:20250101T110000Z\r\nSUMMARY:Test\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 	{
-		req, _ := http.NewRequest("PUT", baseURL+basePath+"/calendars/alice/shared/team/evt1.ics", bytes.NewBufferString(ics))
+		url := baseURL + basePath + "/calendars/alice/shared/team/evt1.ics"
+		req, _ := http.NewRequest("PUT", url, bytes.NewBufferString(ics))
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Content-Type", "text/calendar; charset=utf-8")
 		req.Header.Set("If-None-Match", "*")
@@ -156,7 +157,7 @@ func TestIntegration(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("put shared event status: %d body=%s", resp.StatusCode, string(b))
+			t.Fatalf("put shared event status at %s: %d body=%s", url, resp.StatusCode, string(b))
 		}
 		etag := resp.Header.Get("ETag")
 		if etag == "" {
@@ -166,7 +167,8 @@ func TestIntegration(t *testing.T) {
 
 	// GET event via shared path
 	{
-		req, _ := http.NewRequest("GET", baseURL+basePath+"/calendars/alice/shared/team/evt1.ics", nil)
+		url := baseURL + basePath + "/calendars/alice/shared/team/evt1.ics"
+		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", authz)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -175,7 +177,7 @@ func TestIntegration(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
-			t.Fatalf("get shared event status: %d", resp.StatusCode)
+			t.Fatalf("get shared event status at %s: %d", url, resp.StatusCode)
 		}
 		if !bytes.Contains(b, []byte("SUMMARY:Test")) {
 			t.Fatalf("unexpected body: %s", string(b))

@@ -116,10 +116,18 @@ func (h *Handlers) splitCalendarPath(p string) (owner string, cal string, rest [
 		return "", "", nil
 	}
 	if len(parts) == 2 {
-		// home
+		// /calendars/{owner}/ (home)
 		return parts[1], "", nil
 	}
+
+	// Shared normalization:
+	// /calendars/{owner}/shared/{targetCalURI}/...
+	if len(parts) >= 4 && parts[2] == "shared" {
+		return parts[1], parts[3], parts[4:]
+	}
+
 	if len(parts) >= 3 {
+		// Owned calendar
 		return parts[1], parts[2], parts[3:]
 	}
 	return "", "", nil
