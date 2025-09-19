@@ -16,6 +16,13 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interfac
 	r.Get("/.well-known/caldav", h.HandleWellKnownCalDAV)
 
 	r.Route(cfg.HTTP.BasePath, func(sr chi.Router) {
+		sr.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Advertise capabilities for any DAV subtree request
+				w.Header().Set("DAV", "1, 3, access-control, calendar-access")
+				next.ServeHTTP(w, r)
+			})
+		})
 		sr.Use(authn.Middleware)
 		sr.Options("/*", h.HandleOptions)
 		sr.Handle("/principals/*", h)
