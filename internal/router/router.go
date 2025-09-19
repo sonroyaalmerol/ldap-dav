@@ -25,8 +25,12 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interfac
 			})
 		})
 		sr.Options("/*", h.HandleOptions)
-		sr.Handle("/principals/*", h)
-		sr.Handle("/calendars/*", h)
+		sr.Route("/principals", func(pr chi.Router) {
+			pr.Handle("/*", h)
+		})
+		sr.Route("/calendars", func(cr chi.Router) {
+			cr.Handle("/*", h)
+		})
 		sr.Handle("/*", h)
 	})
 
