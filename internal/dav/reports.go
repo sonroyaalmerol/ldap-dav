@@ -186,10 +186,10 @@ func buildReportResponse(hrefStr string, props propRequest, o *storage.Object) r
 	}
 	return response{
 		Href: hrefStr,
-		Prop: propstat{
+		Props: []propstat{{
 			Prop:   p,
 			Status: ok(),
-		},
+		}},
 	}
 }
 
@@ -233,20 +233,20 @@ func (h *Handlers) reportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	resps := []response{
 		{
 			Href: colHref,
-			Prop: propstat{
+			Props: []propstat{{
 				Prop: prop{
 					Resourcetype:                  makeCalendarResourcetype(),
 					SupportedCalendarComponentSet: &supportedCompSet{Comp: []comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
 					SyncToken:                     &curToken,
 				},
 				Status: ok(),
-			},
+			}},
 		},
 	}
 
 	if limit > 0 && len(changes) == limit {
 		n := len(changes)
-		resps[0].Extra = append(resps[0].Extra, propstat{
+		resps[0].Props = append(resps[0].Props, propstat{
 			Prop:   prop{MatchesWithinLimits: &n},
 			Status: ok(),
 		})
@@ -257,18 +257,18 @@ func (h *Handlers) reportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		if ch.Deleted {
 			resps = append(resps, response{
 				Href: hrefStr,
-				Prop: propstat{
+				Props: []propstat{{
 					Prop:   prop{},
 					Status: "HTTP/1.1 404 Not Found",
-				},
+				}},
 			})
 		} else {
 			resps = append(resps, response{
 				Href: hrefStr,
-				Prop: propstat{
+				Props: []propstat{{
 					Prop:   prop{ContentType: calContentType()},
 					Status: ok(),
-				},
+				}},
 			})
 		}
 	}

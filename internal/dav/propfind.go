@@ -47,7 +47,7 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 		Resp: []response{
 			{
 				Href: r.URL.Path,
-				Prop: propstat{
+				Props: []propstat{{
 					Prop: prop{
 						Resourcetype:           makeCollectionResourcetype(),
 						CurrentUserPrincipal:   &href{Value: h.currentUserPrincipalHref(r.Context())},
@@ -55,7 +55,7 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 						PrincipalCollectionSet: &hrefs{Values: []string{joinURL(h.basePath, "principals") + "/"}},
 					},
 					Status: ok(),
-				},
+				}},
 			},
 		},
 	}
@@ -73,7 +73,7 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, dep
 		Resp: []response{
 			{
 				Href: self,
-				Prop: propstat{
+				Props: []propstat{{
 					Prop: prop{
 						Resourcetype:         makePrincipalResourcetype(),
 						DisplayName:          &u.DisplayName,
@@ -82,7 +82,7 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, dep
 						CalendarHomeSet:      &href{Value: h.calendarHome(u.UID)},
 					},
 					Status: ok(),
-				},
+				}},
 			},
 		},
 	}
@@ -118,10 +118,10 @@ func (h *Handlers) propfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 	// Home itself
 	resps = append(resps, response{
 		Href: home,
-		Prop: propstat{Prop: prop{
+		Props: []propstat{{Prop: prop{
 			Resourcetype: makeCollectionResourcetype(),
 			DisplayName:  strPtr("Calendar Home"),
-		}, Status: ok()},
+		}, Status: ok()}},
 	})
 
 	if depth == "1" {
@@ -130,7 +130,7 @@ func (h *Handlers) propfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 			hrefStr := h.calendarPath(ownerUID, c.URI)
 			resps = append(resps, response{
 				Href: hrefStr,
-				Prop: propstat{Prop: prop{
+				Props: []propstat{{Prop: prop{
 					Resourcetype:                  makeCalendarResourcetype(),
 					DisplayName:                   &c.DisplayName,
 					Owner:                         &href{Value: h.principalURL(ownerUID)},
@@ -139,18 +139,18 @@ func (h *Handlers) propfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 					SyncToken:                     &c.CTag,
 					ACL:                           h.buildReadOnlyACL(r, c.URI, ownerUID),
 				}, Status: ok()},
-			})
+				}})
 		}
 
 		// Shared calendars container
 		sharedBase := h.sharedRoot(ownerUID)
 		resps = append(resps, response{
 			Href: sharedBase,
-			Prop: propstat{Prop: prop{
+			Props: []propstat{{Prop: prop{
 				Resourcetype: makeCollectionResourcetype(),
 				DisplayName:  strPtr("Shared"),
 			}, Status: ok()},
-		})
+			}})
 		all, err := h.store.ListAllCalendars(r.Context())
 		if err == nil {
 			for _, c := range all {
@@ -161,7 +161,7 @@ func (h *Handlers) propfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 					hrefStr := joinURL(sharedBase, c.URI) + "/"
 					resps = append(resps, response{
 						Href: hrefStr,
-						Prop: propstat{Prop: prop{
+						Props: []propstat{{Prop: prop{
 							Resourcetype:                  makeCalendarResourcetype(),
 							DisplayName:                   &c.DisplayName,
 							Owner:                         &href{Value: h.ownerPrincipalForCalendar(c)},
@@ -170,7 +170,7 @@ func (h *Handlers) propfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 							SyncToken:                     &c.CTag,
 							ACL:                           h.buildReadOnlyACL(r, c.URI, ownerUID),
 						}, Status: ok()},
-					})
+						}})
 				}
 			}
 		}
@@ -197,10 +197,10 @@ func (h *Handlers) propfindCalendarCollection(w http.ResponseWriter, r *http.Req
 	if cal == nil && calURI == "shared" {
 		resps := []response{{
 			Href: joinURL(h.basePath, "calendars", ownerUID, "shared") + "/",
-			Prop: propstat{Prop: prop{
+			Props: []propstat{{Prop: prop{
 				Resourcetype: makeCollectionResourcetype(),
 				DisplayName:  strPtr("Shared"),
-			}, Status: ok()},
+			}, Status: ok()}},
 		}}
 		writeMultiStatus(w, multistatus{Resp: resps})
 		return
@@ -214,7 +214,7 @@ func (h *Handlers) propfindCalendarCollection(w http.ResponseWriter, r *http.Req
 	// Depth 0: collection props
 	resps := []response{{
 		Href: h.calendarPath(ownerUID, calURI),
-		Prop: propstat{Prop: prop{
+		Props: []propstat{{Prop: prop{
 			Resourcetype:                  makeCalendarResourcetype(),
 			DisplayName:                   &cal.DisplayName,
 			Owner:                         &href{Value: h.principalURL(ownerUID)},
@@ -223,7 +223,7 @@ func (h *Handlers) propfindCalendarCollection(w http.ResponseWriter, r *http.Req
 			SyncToken:                     &cal.CTag,
 			GetLastModified:               cal.UpdatedAt.UTC().Format(time.RFC1123),
 			ACL:                           h.buildReadOnlyACL(r, calURI, ownerUID),
-		}, Status: ok()},
+		}, Status: ok()}},
 	}}
 
 	writeMultiStatus(w, multistatus{Resp: resps})
@@ -251,7 +251,7 @@ func (h *Handlers) propfindCalendarObject(w http.ResponseWriter, r *http.Request
 	hrefStr := joinURL(h.basePath, "calendars", ownerUID, calURI, uid+".ics")
 	resps := []response{{
 		Href: hrefStr,
-		Prop: propstat{Prop: prop{
+		Props: []propstat{{Prop: prop{
 			ContentType: calContentType(),
 			GetLastModified: func() string {
 				if obj, err := h.store.GetObject(r.Context(), calendarID, uid); err == nil && !obj.UpdatedAt.IsZero() {
@@ -259,7 +259,7 @@ func (h *Handlers) propfindCalendarObject(w http.ResponseWriter, r *http.Request
 				}
 				return ""
 			}(),
-		}, Status: ok()},
+		}, Status: ok()}},
 	}}
 	writeMultiStatus(w, multistatus{Resp: resps})
 }

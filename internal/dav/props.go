@@ -26,8 +26,7 @@ type supportedCalData struct {
 
 type response struct {
 	Href  string     `xml:"href"`
-	Prop  propstat   `xml:"propstat"`
-	Extra []propstat `xml:"propstat,omitempty"`
+	Props []propstat `xml:"propstat"`
 }
 
 type propstat struct {
@@ -133,10 +132,6 @@ func makePrincipalResourcetype() *resourcetype {
 func calContentType() *string {
 	ct := "text/calendar; charset=utf-8"
 	return &ct
-}
-
-func supportedVEVENT() *supportedCompSet {
-	return &supportedCompSet{Comp: []comp{{Name: "VEVENT"}}}
 }
 
 func joinURL(parts ...string) string {
