@@ -56,6 +56,12 @@ func NewChain(cfg *config.Config, dir directory.Directory, logger zerolog.Logger
 
 func (c *Chain) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow unauthenticated OPTIONS to proceed for capability discovery
+		if r.Method == "OPTIONS" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		authz := r.Header.Get("Authorization")
 		var p *Principal
 		var err error
