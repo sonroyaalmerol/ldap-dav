@@ -11,6 +11,6 @@ func (h *Handlers) HandleWellKnownCalDAV(w http.ResponseWriter, r *http.Request)
 
 func (h *Handlers) HandleOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("DAV", "1, 3, access-control, calendar-access")
-	w.Header().Set("Allow", "OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE, MKCOL, PROPPATCH, ACL")
+	w.Header().Set("Allow", "OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE, MKCOL, PROPPATCH, ACL, HEAD")
 	w.WriteHeader(http.StatusOK)
 }

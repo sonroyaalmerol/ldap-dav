@@ -94,15 +94,16 @@ func TestIntegration(t *testing.T) {
 
 	// OPTIONS
 	{
-		req, _ := http.NewRequest("OPTIONS", baseURL+basePath+"/", nil)
+		url := baseURL + basePath + "/calendars/"
+		req, _ := http.NewRequest("OPTIONS", url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("options: %v", err)
 		}
-		_ = resp.Body.Close()
+		defer resp.Body.Close()
 		got := resp.Header.Get("DAV")
 		if got == "" || !bytes.Contains([]byte(got), []byte("calendar-access")) {
-			t.Fatalf("DAV header missing calendar-access: %q", got)
+			t.Fatalf("DAV header missing calendar-access at %s: %q", url, got)
 		}
 	}
 
