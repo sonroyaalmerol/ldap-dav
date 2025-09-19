@@ -31,6 +31,7 @@ userPassword: password
 
 dn: cn=team-cal-readers,ou=Groups,dc=example,dc=com
 objectClass: groupOfNames
+objectClass: caldavGroup
 cn: team-cal-readers
 member: uid=alice,ou=People,dc=example,dc=com
 caldavCalendars: team
@@ -38,6 +39,7 @@ caldavPrivileges: read
 
 dn: cn=team-cal-editors,ou=Groups,dc=example,dc=com
 objectClass: groupOfNames
+objectClass: caldavGroup
 cn: team-cal-editors
 member: uid=alice,ou=People,dc=example,dc=com
 caldavBindings: calendar-id=team;priv=read,edit,write,bind,unbind

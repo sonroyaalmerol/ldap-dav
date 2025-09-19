@@ -5,19 +5,19 @@ olcAttributeTypes: ( 1.3.6.1.4.1.55555.1.1 NAME 'caldavCalendars'
   DESC 'CalDAV calendar identifiers'
   EQUALITY caseIgnoreMatch
   SUBSTR caseIgnoreSubstringsMatch
-  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
-  SINGLE-VALUE )
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
 olcAttributeTypes: ( 1.3.6.1.4.1.55555.1.2 NAME 'caldavPrivileges'
-  DESC 'CalDAV privilege list'
+  DESC 'CalDAV privilege list (read,edit,write,bind,unbind,delete)'
   EQUALITY caseIgnoreMatch
   SUBSTR caseIgnoreSubstringsMatch
   SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
 olcAttributeTypes: ( 1.3.6.1.4.1.55555.1.3 NAME 'caldavBindings'
-  DESC 'CalDAV bindings in compact form'
+  DESC 'CalDAV bindings in compact form (calendar-id=...;priv=...)'
   EQUALITY caseIgnoreMatch
   SUBSTR caseIgnoreSubstringsMatch
   SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
 olcObjectClasses: ( 1.3.6.1.4.1.55555.2.1 NAME 'caldavGroup'
   DESC 'Group with CalDAV ACL attributes'
-  SUP top AUXILIARY
+  SUP top
+  AUXILIARY
   MAY ( caldavCalendars $ caldavPrivileges $ caldavBindings ) )
