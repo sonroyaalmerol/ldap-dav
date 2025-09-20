@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -52,49 +51,6 @@ func (h *Handlers) mustCanRead(w http.ResponseWriter, ctx context.Context, pr *a
 		return false
 	}
 	return true
-}
-
-func (h *Handlers) SplitCalendarPath(p string) (owner string, cal string, rest []string) {
-	// Accept both absolute and full-URL hrefs
-	if !strings.HasPrefix(p, "/") {
-		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-			// HREF may be full URL; extract path
-			if idx := strings.Index(p, "://"); idx >= 0 {
-				if slash := strings.Index(p[idx+3:], "/"); slash >= 0 {
-					p = p[idx+3+slash:]
-				}
-			}
-		}
-	}
-	pp := p
-	pp = strings.TrimPrefix(pp, h.basePath)
-	pp = strings.TrimPrefix(pp, "/")
-	parts := strings.Split(pp, "/")
-	// patterns:
-	// calendars/{owner}/ -> home
-	// calendars/{owner}/{cal}/...
-	if len(parts) == 0 {
-		return "", "", nil
-	}
-	if parts[0] != "calendars" {
-		return "", "", nil
-	}
-	if len(parts) == 2 {
-		// /calendars/{owner}/ (home)
-		return parts[1], "", nil
-	}
-
-	// Shared normalization:
-	// /calendars/{owner}/shared/{targetCalURI}/...
-	if len(parts) >= 4 && parts[2] == "shared" {
-		return parts[1], parts[3], parts[4:]
-	}
-
-	if len(parts) >= 3 {
-		// Owned calendar
-		return parts[1], parts[2], parts[3:]
-	}
-	return "", "", nil
 }
 
 func (h *Handlers) loadCalendarByOwnerURI(ctx context.Context, ownerUID, calURI string) (*storage.Calendar, error) {

@@ -8,7 +8,10 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
 )
+
+var _ DAVService = (*caldav.Handlers)(nil)
 
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
 	r := &Router{
@@ -111,7 +114,7 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 	case "PROPFIND":
 		r.handlers.HandlePropfind(w, req)
 	case "REPORT":
-		r.handlers.HandleReport(w, req)
+		service.HandleReport(w, req)
 	case http.MethodGet:
 		service.HandleGet(w, req)
 	case http.MethodHead:

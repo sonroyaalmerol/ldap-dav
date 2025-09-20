@@ -12,7 +12,7 @@ import (
 )
 
 func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q common.CalendarQuery) {
-	owner, calURI, _ := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
 		http.NotFound(w, r)
@@ -69,7 +69,7 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 	props := common.ParsePropRequest(mg.Prop)
 	var resps []common.Response
 	for _, hrefStr := range mg.Hrefs {
-		owner, calURI, rest := h.SplitCalendarPath(hrefStr)
+		owner, calURI, rest := splitResourcePath(hrefStr, h.basePath)
 		if owner == "" || len(rest) == 0 {
 			continue
 		}
@@ -130,7 +130,7 @@ func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Ob
 }
 
 func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, sc common.SyncCollection) {
-	owner, calURI, _ := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
 		http.NotFound(w, r)
@@ -211,7 +211,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {
-	owner, calURI, _ := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
 		http.NotFound(w, r)

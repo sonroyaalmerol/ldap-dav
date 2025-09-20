@@ -25,7 +25,7 @@ func (h *Handlers) HandleHead(w http.ResponseWriter, r *http.Request) {
 
 // HandleGet returns the raw iCalendar object by UID path.
 func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -70,7 +70,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandlePut creates or updates an iCalendar object and detects its component type.
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -182,7 +182,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete removes an iCalendar object by UID (respecting If-Match) and records a change.
 func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -219,7 +219,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
@@ -233,7 +233,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
@@ -287,6 +287,41 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><d:multistatus xmlns:d="DAV:"><d:response><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>`)
 }
 
+func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	_ = r.Body.Close()
+
+	root := struct {
+		XMLName xml.Name
+	}{}
+	if err := xml.Unmarshal(body, &root); err != nil {
+		http.Error(w, "bad xml", http.StatusBadRequest)
+		return
+	}
+
+	switch root.XMLName.Space + " " + root.XMLName.Local {
+	case common.NSCalDAV + " calendar-query":
+		var q common.CalendarQuery
+		_ = xml.Unmarshal(body, &q)
+		h.ReportCalendarQuery(w, r, q)
+	case common.NSCalDAV + " calendar-multiget":
+		var mg common.CalendarMultiget
+		_ = xml.Unmarshal(body, &mg)
+		h.ReportCalendarMultiget(w, r, mg)
+	case common.NSDAV + " sync-collection":
+		var sc common.SyncCollection
+		_ = xml.Unmarshal(body, &sc)
+		h.ReportSyncCollection(w, r, sc)
+	case common.NSCalDAV + " free-busy-query":
+		var fb common.FreeBusyQuery
+		_ = xml.Unmarshal(body, &fb)
+		h.ReportFreeBusyQuery(w, r, fb)
+	default:
+		http.Error(w, "unsupported REPORT", http.StatusBadRequest)
+	}
+}
+
 func (h *Handlers) HandleACL(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "ACLs managed via LDAP groups", http.StatusForbidden)
 }
+

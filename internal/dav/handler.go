@@ -12,18 +12,23 @@ import (
 )
 
 type Handlers struct {
-	cfg            *config.Config
-	store          storage.Store
-	dir            directory.Directory
-	auth           *auth.Chain
-	aclProv        acl.Provider
-	logger         zerolog.Logger
-	basePath       string
-	CalDAVHandlers caldav.Handlers
+	cfg              *config.Config
+	store            storage.Store
+	dir              directory.Directory
+	auth             *auth.Chain
+	aclProv          acl.Provider
+	logger           zerolog.Logger
+	basePath         string
+	CalDAVHandlers   caldav.Handlers
+	resourceHandlers map[string]ResourceHandler
 }
 
+var _ ResourceHandler = (*caldav.CalDAVResourceHandler)(nil)
+
+//var _ ResourceHandler = (*caldav.CardDAVResourceHandler)(nil)
+
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, authn *auth.Chain, logger zerolog.Logger) *Handlers {
-	return &Handlers{
+	h := &Handlers{
 		cfg:            cfg,
 		store:          store,
 		dir:            dir,
@@ -33,4 +38,9 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 		basePath:       cfg.HTTP.BasePath,
 		CalDAVHandlers: *caldav.NewHandlers(cfg, store, dir, logger),
 	}
+
+	h.RegisterResourceHandler("calendars", caldav.NewCalDAVResourceHandler(&h.CalDAVHandlers, h.basePath))
+	//h.RegisterResourceHandler("addressbooks", caldav.NewCardDAVResourceHandler(&h.CardDAVHandlers, h.basePath))
+
+	return h
 }
