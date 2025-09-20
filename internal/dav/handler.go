@@ -1,6 +1,8 @@
 package dav
 
 import (
+	"sync"
+
 	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
@@ -12,15 +14,16 @@ import (
 )
 
 type Handlers struct {
-	cfg              *config.Config
-	store            storage.Store
-	dir              directory.Directory
-	auth             *auth.Chain
-	aclProv          acl.Provider
-	logger           zerolog.Logger
-	basePath         string
-	CalDAVHandlers   caldav.Handlers
-	resourceHandlers map[string]ResourceHandler
+	cfg                 *config.Config
+	store               storage.Store
+	dir                 directory.Directory
+	auth                *auth.Chain
+	aclProv             acl.Provider
+	logger              zerolog.Logger
+	basePath            string
+	CalDAVHandlers      caldav.Handlers
+	resourceHandlers    map[string]ResourceHandler
+	resourceHandlersMux sync.Mutex
 }
 
 var _ ResourceHandler = (*caldav.CalDAVResourceHandler)(nil)
@@ -29,14 +32,15 @@ var _ ResourceHandler = (*caldav.CalDAVResourceHandler)(nil)
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, authn *auth.Chain, logger zerolog.Logger) *Handlers {
 	h := &Handlers{
-		cfg:            cfg,
-		store:          store,
-		dir:            dir,
-		auth:           authn,
-		aclProv:        acl.NewLDAPACL(dir),
-		logger:         logger,
-		basePath:       cfg.HTTP.BasePath,
-		CalDAVHandlers: *caldav.NewHandlers(cfg, store, dir, logger),
+		cfg:              cfg,
+		store:            store,
+		dir:              dir,
+		auth:             authn,
+		aclProv:          acl.NewLDAPACL(dir),
+		logger:           logger,
+		basePath:         cfg.HTTP.BasePath,
+		resourceHandlers: make(map[string]ResourceHandler),
+		CalDAVHandlers:   *caldav.NewHandlers(cfg, store, dir, logger),
 	}
 
 	h.RegisterResourceHandler("calendars", caldav.NewCalDAVResourceHandler(&h.CalDAVHandlers, h.basePath))
