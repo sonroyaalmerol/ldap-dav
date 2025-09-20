@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/ldap-dav ./cmd/ldap-dav
-RUN go build -trimpath -ldflags="-s -w" -o /opt/ldap-dav-bootstrap ./cmd/ldap-dav-bootstrap
+RUN go build -trimpath -ldflags="-s -w" -o /out/ldap-dav-bootstrap ./cmd/ldap-dav-bootstrap
 
 # ====== Runtime stage ======
 FROM alpine:3.20
