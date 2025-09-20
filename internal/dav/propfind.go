@@ -123,8 +123,5 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) RegisterResourceHandler(key string, handler ResourceHandler) {
-	h.resourceHandlersMux.Lock()
-	defer h.resourceHandlersMux.Unlock()
-
 	h.resourceHandlers[key] = handler
 }
