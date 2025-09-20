@@ -7,6 +7,7 @@ RUN go mod download
 COPY . .
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/ldap-dav ./cmd/ldap-dav
+RUN go build -trimpath -ldflags="-s -w" -o /opt/ldap-dav-bootstrap ./cmd/ldap-dav-bootstrap
 
 # ====== Runtime stage ======
 FROM alpine:3.20
@@ -17,6 +18,7 @@ RUN apk add --no-cache ca-certificates tzdata && update-ca-certificates
 RUN addgroup -S app && adduser -S app -G app
 
 COPY --from=builder /out/ldap-dav /usr/local/bin/ldap-dav
+COPY --from=builder /out/ldap-dav-bootstrap /usr/local/bin/ldap-dav-bootstrap
 
 ENV HTTP_ADDR=:8080 \
     HTTP_BASE_PATH=/dav \
