@@ -18,12 +18,12 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 	_ = r.Body.Close()
 
 	// Identify resource kind based on path
-	if common.IsPrincipalUsers(r.URL.Path, h.basePath) {
+	if common.IsPrincipalPath(r.URL.Path, h.basePath) {
 		h.propfindPrincipal(w, r, depth)
 		return
 	}
 
-	if common.IsCalendarUsers(r.URL.Path, h.basePath) {
+	if common.IsCalendarPath(r.URL.Path, h.basePath) {
 		if owner, cal, rest := h.CalDAVHandlers.SplitCalendarPath(r.URL.Path); owner != "" {
 			if len(rest) == 0 {
 				// calendar collection or home

@@ -6,7 +6,6 @@ import (
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
-	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
 func BuildReadOnlyACL(r *http.Request, basePath, calURI, ownerUID string, aclProv acl.Provider) *AclProp {
@@ -54,14 +53,6 @@ func BuildReadOnlyACL(r *http.Request, basePath, calURI, ownerUID string, aclPro
 			},
 		},
 	}
-}
-
-func OwnerPrincipalForCalendar(c *storage.Calendar, basePath string) string {
-	if c.OwnerUserID != "" {
-		return PrincipalURL(basePath, c.OwnerUserID)
-	}
-	// could be group-owned; expose group principal path if implemented
-	return JoinURL(basePath, "principals")
 }
 
 func CurrentUserPrincipalHref(ctx context.Context, basePath string) string {

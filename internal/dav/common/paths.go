@@ -27,17 +27,17 @@ func JoinURL(parts ...string) string {
 	return s
 }
 
-func IsPrincipalUsers(p, base string) bool {
+func IsPrincipalPath(p, base string) bool {
 	pp := strings.TrimPrefix(p, base)
 	return strings.HasPrefix(pp, "/principals")
 }
 
-func IsCalendarUsers(p, base string) bool {
+func IsCalendarPath(p, base string) bool {
 	pp := strings.TrimPrefix(p, base)
 	return strings.HasPrefix(pp, "/calendars")
 }
 
-func IsAddressBookUsers(p, base string) bool {
+func IsAddressBookPath(p, base string) bool {
 	pp := strings.TrimPrefix(p, base)
 	return strings.HasPrefix(pp, "/addressbooks")
 }

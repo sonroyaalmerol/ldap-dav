@@ -120,7 +120,7 @@ func (h *Handlers) PropfindCalendarHome(w http.ResponseWriter, r *http.Request, 
 						Props: []common.PropStat{{Prop: common.Prop{
 							ResourceType:                  common.MakeCalendarResourcetype(),
 							DisplayName:                   &c.DisplayName,
-							Owner:                         &common.Href{Value: common.OwnerPrincipalForCalendar(c, h.basePath)},
+							Owner:                         &common.Href{Value: h.ownerPrincipalForCalendar(c)},
 							SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
 							GetCTag:                       &c.CTag,
 							SyncToken:                     &c.CTag,
@@ -184,3 +184,12 @@ func (h *Handlers) PropfindCalendarCollection(w http.ResponseWriter, r *http.Req
 
 	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
+
+func (h *Handlers) ownerPrincipalForCalendar(c *storage.Calendar) string {
+	if c.OwnerUserID != "" {
+		return common.PrincipalURL(h.basePath, c.OwnerUserID)
+	}
+	// could be group-owned; expose group principal path if implemented
+	return common.JoinURL(h.basePath, "principals")
+}
+
