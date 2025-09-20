@@ -14,20 +14,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract version from tag
-        id: ver
+      - name: Extract version and repo
+        id: meta
         run: |
-          tag="${GITHUB_REF_NAME}"  # e.g., v1.2.3
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          # Strip leading 'v' if present
-          ver="${tag#v}"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          # Compute semver parts
-          major="${ver%%.*}"
-          rest="${ver#*.}"
-          minor="${rest%%.*}"
-          echo "major=$major" >> "$GITHUB_OUTPUT"
-          echo "minor=$minor" >> "$GITHUB_OUTPUT"
+          tag="${GITHUB_REF_NAME}"           # e.g., v1.2.3
+          ver="${tag#v}"                     # 1.2.3
+          major="${ver%%.*}"                 # 1
+          rest="${ver#*.}"                   # 2.3
+          minor="${rest%%.*}"                # 2
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "major=${major}" >> "$GITHUB_OUTPUT"
+          echo "minor=${minor}" >> "$GITHUB_OUTPUT"
+          echo "repo_name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -50,7 +49,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.repository }}" | awk -F/ '{print $2}'):${{ steps.ver.outputs.tag }}
-            ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.repository }}" | awk -F/ '{print $2}'):v${{ steps.ver.outputs.major }}.${{ steps.ver.outputs.minor }}
-            ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.repository }}" | awk -F/ '{print $2}'):v${{ steps.ver.outputs.major }}
-            ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.repository }}" | awk -F/ '{print $2}'):latest
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.repo_name }}:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.repo_name }}:v${{ steps.meta.outputs.major }}.${{ steps.meta.outputs.minor }}
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.repo_name }}:v${{ steps.meta.outputs.major }}
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.repo_name }}:latest
