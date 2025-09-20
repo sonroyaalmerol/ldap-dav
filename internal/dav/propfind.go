@@ -23,6 +23,11 @@ func (h *Handlers) determineResource(urlPath string) string {
 	return strings.ToLower(strings.SplitN(pp, "/", 2)[0])
 }
 
+func (h Handlers) isPrincipalPath(p string) bool {
+	pp := strings.TrimPrefix(p, h.basePath)
+	return strings.HasPrefix(pp, "/principals")
+}
+
 func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 	depth := r.Header.Get("Depth")
 	if depth == "" {
@@ -32,7 +37,7 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	_ = r.Body.Close()
 
-	if common.IsPrincipalPath(r.URL.Path, h.basePath) {
+	if h.isPrincipalPath(r.URL.Path) {
 		h.propfindPrincipal(w, r, depth)
 		return
 	}

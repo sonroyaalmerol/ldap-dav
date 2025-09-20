@@ -32,7 +32,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	home := common.CalendarHome(c.basePath, owner)
+	home := calendarHome(c.basePath, owner)
 
 	// Only allow user to view own home listing
 	if u.UID != owner {
@@ -64,7 +64,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	if depth == "1" {
 		// Owned calendars
 		for _, cc := range owned {
-			hrefStr := common.CalendarPath(c.basePath, owner, cc.URI)
+			hrefStr := calendarPath(c.basePath, owner, cc.URI)
 			resps = append(resps, common.Response{
 				Href: hrefStr,
 				Props: []common.PropStat{{Prop: common.Prop{
@@ -80,7 +80,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		}
 
 		// Shared calendars container
-		sharedBase := common.SharedRoot(c.basePath, owner)
+		sharedBase := sharedRoot(c.basePath, owner)
 		resps = append(resps, common.Response{
 			Href: sharedBase,
 			Props: []common.PropStat{{Prop: common.Prop{
@@ -150,7 +150,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 
 	// Depth 0: collection props
 	resps := []common.Response{{
-		Href: common.CalendarPath(c.basePath, owner, collection),
+		Href: calendarPath(c.basePath, owner, collection),
 		Props: []common.PropStat{{Prop: common.Prop{
 			ResourceType:                  common.MakeCalendarResourcetype(),
 			DisplayName:                   &cal.DisplayName,
@@ -202,7 +202,7 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 }
 
 func (c *CalDAVResourceHandler) GetHomeSetProperty(basePath, uid string) interface{} {
-	return &common.Href{Value: common.CalendarHome(basePath, uid)}
+	return &common.Href{Value: calendarHome(basePath, uid)}
 }
 
 func (c *CalDAVResourceHandler) ownerPrincipalForCalendar(cal *storage.Calendar) string {

@@ -163,7 +163,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	colHref := common.CalendarPath(h.basePath, owner, calURI)
+	colHref := calendarPath(h.basePath, owner, calURI)
 	resps := []common.Response{
 		{
 			Href: colHref,
