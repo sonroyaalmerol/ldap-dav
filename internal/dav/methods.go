@@ -83,6 +83,13 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	h.logger.Debug().
+		Str("owner", owner).
+		Str("calURI", calURI).
+		Str("calendarID", calendarID).
+		Str("calOwner", calOwner).
+		Msg("resolved calendar for PUT")
+
 	pr := mustPrincipal(r.Context())
 
 	// ACL: owner or create/edit
@@ -114,6 +121,11 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Insert DTSTAMP if missing for VEVENT
+	if fixed, inserted := ensureDTStamp(raw); inserted {
+		raw = fixed
+	}
+
 	// Normalize ICS
 	ics, err := ical.NormalizeICS(raw)
 	if err != nil {
@@ -143,6 +155,10 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		Component:  compType, // "VEVENT", "VTODO", or "VJOURNAL"
 	}
 	if err := h.store.PutObject(r.Context(), obj); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("PutObject failed")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
