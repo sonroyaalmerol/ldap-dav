@@ -22,6 +22,9 @@ func splitResourcePath(urlPath, basePath string) (owner, collection string, rest
 	pp = strings.TrimPrefix(pp, basePath)
 	pp = strings.TrimPrefix(pp, "/")
 	parts := strings.Split(pp, "/")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
 	// patterns:
 	// calendars/{owner}/ -> home
 	// calendars/{owner}/{cal}/...
