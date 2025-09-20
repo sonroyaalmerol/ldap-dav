@@ -148,19 +148,39 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		return
 	}
 
+	prop := common.Prop{
+		ResourceType:                  common.MakeCalendarResourcetype(),
+		DisplayName:                   &cal.DisplayName,
+		Owner:                         &common.Href{Value: common.PrincipalURL(c.basePath, owner)},
+		SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
+		GetCTag:                       &cal.CTag,
+		SyncToken:                     &cal.CTag,
+		GetLastModified:               cal.UpdatedAt.UTC().Format(time.RFC1123),
+		ACL:                           common.BuildReadOnlyACL(r, c.basePath, collection, owner, c.handlers.aclProv),
+
+		// CalDAV-specific properties
+		CalendarDescription:     common.StrPtr(cal.Description),
+		CalendarTimezone:        c.getCalendarTimezone(cal),
+		SupportedCalendarData:   &common.SupportedCalData{ContentType: "text/calendar", Version: "2.0"},
+		MaxResourceSize:         common.IntPtr(c.getMaxResourceSize()),
+		MinDateTime:             common.StrPtr("19000101T000000Z"),
+		MaxDateTime:             common.StrPtr("20380119T031407Z"),
+		MaxInstances:            common.IntPtr(1000),
+		MaxAttendeesPerInstance: common.IntPtr(100),
+		SupportedCollationSet:   c.getSupportedCollationSet(),
+
+		// Quota properties
+		QuotaAvailableBytes: c.getQuotaAvailableBytes(cal),
+		QuotaUsedBytes:      c.getQuotaUsedBytes(cal),
+
+		// Supported reports
+		SupportedReportSet: c.getSupportedReportSet(),
+	}
+
 	// Depth 0: collection props
 	resps := []common.Response{{
-		Href: calendarPath(c.basePath, owner, collection),
-		Props: []common.PropStat{{Prop: common.Prop{
-			ResourceType:                  common.MakeCalendarResourcetype(),
-			DisplayName:                   &cal.DisplayName,
-			Owner:                         &common.Href{Value: common.PrincipalURL(c.basePath, owner)},
-			SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-			GetCTag:                       &cal.CTag,
-			SyncToken:                     &cal.CTag,
-			GetLastModified:               cal.UpdatedAt.UTC().Format(time.RFC1123),
-			ACL:                           common.BuildReadOnlyACL(r, c.basePath, collection, owner, c.handlers.aclProv),
-		}, Status: common.Ok()}},
+		Href:  calendarPath(c.basePath, owner, collection),
+		Props: []common.PropStat{{Prop: prop, Status: common.Ok()}},
 	}}
 
 	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
@@ -211,4 +231,49 @@ func (c *CalDAVResourceHandler) ownerPrincipalForCalendar(cal *storage.Calendar)
 	}
 	// could be group-owned; expose group principal path if implemented
 	return common.JoinURL(c.basePath, "principals")
+}
+
+func (c *CalDAVResourceHandler) getCalendarTimezone(cal *storage.Calendar) *string {
+	// TODO: implement proper with storage
+	// Default to UTC
+	return common.StrPtr("BEGIN:VTIMEZONE\r\nTZID:UTC\r\nEND:VTIMEZONE\r\n")
+}
+
+func (c *CalDAVResourceHandler) getMaxResourceSize() int {
+	// Default 10MB limit
+	return 10 * 1024 * 1024
+}
+
+func (c *CalDAVResourceHandler) getSupportedCollationSet() *common.SupportedCollationSet {
+	return &common.SupportedCollationSet{
+		SupportedCollation: []common.SupportedCollation{
+			{Value: "i;ascii-casemap"},
+			{Value: "i;octet"},
+			{Value: "i;unicode-casemap"},
+		},
+	}
+}
+
+func (c *CalDAVResourceHandler) getSupportedReportSet() *common.SupportedReportSet {
+	return &common.SupportedReportSet{
+		SupportedReport: []common.SupportedReport{
+			{Report: common.ReportType{CalendarQuery: &struct{}{}}},
+			{Report: common.ReportType{CalendarMultiget: &struct{}{}}},
+			{Report: common.ReportType{FreeBusyQuery: &struct{}{}}},
+			{Report: common.ReportType{SyncCollection: &struct{}{}}},
+		},
+	}
+}
+
+func (c *CalDAVResourceHandler) getQuotaAvailableBytes(cal *storage.Calendar) *int64 {
+	// TODO: implement proper with storage
+	available := int64(1024 * 1024 * 1024) // 1GB default
+	return &available
+}
+
+func (c *CalDAVResourceHandler) getQuotaUsedBytes(cal *storage.Calendar) *int64 {
+	// TODO: implement proper with storage
+	used := int64(0)
+	// You might query your storage backend here to get actual usage
+	return &used
 }

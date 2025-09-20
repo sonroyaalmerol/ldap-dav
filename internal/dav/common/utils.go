@@ -68,6 +68,7 @@ func SafeSegment(s string) bool {
 }
 
 func StrPtr(s string) *string { return &s }
+func IntPtr(i int) *int       { return &i }
 
 func ContainsComponent(comps []string, target string) bool {
 	for _, comp := range comps {

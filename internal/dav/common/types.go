@@ -40,6 +40,45 @@ type Prop struct {
 	MatchesWithinLimits           *int              `xml:"DAV: number-of-matches-within-limits,omitempty"`
 	SupportedCalendarData         *SupportedCalData `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-data,omitempty"`
 	ACL                           *AclProp          `xml:"DAV: acl,omitempty"`
+	// CalDAV-specific properties
+	CalendarDescription     *string                `xml:"urn:ietf:params:xml:ns:caldav calendar-description,omitempty"`
+	CalendarTimezone        *string                `xml:"urn:ietf:params:xml:ns:caldav calendar-timezone,omitempty"`
+	MaxResourceSize         *int                   `xml:"urn:ietf:params:xml:ns:caldav max-resource-size,omitempty"`
+	MinDateTime             *string                `xml:"urn:ietf:params:xml:ns:caldav min-date-time,omitempty"`
+	MaxDateTime             *string                `xml:"urn:ietf:params:xml:ns:caldav max-date-time,omitempty"`
+	MaxInstances            *int                   `xml:"urn:ietf:params:xml:ns:caldav max-instances,omitempty"`
+	MaxAttendeesPerInstance *int                   `xml:"urn:ietf:params:xml:ns:caldav max-attendees-per-instance,omitempty"`
+	SupportedCollationSet   *SupportedCollationSet `xml:"urn:ietf:params:xml:ns:caldav supported-collation-set,omitempty"`
+
+	// Quota properties (WebDAV Quota extension)
+	QuotaAvailableBytes *int64 `xml:"DAV: quota-available-bytes,omitempty"`
+	QuotaUsedBytes      *int64 `xml:"DAV: quota-used-bytes,omitempty"`
+
+	// Report support property
+	SupportedReportSet *SupportedReportSet `xml:"DAV: supported-report-set,omitempty"`
+}
+
+type SupportedCollationSet struct {
+	SupportedCollation []SupportedCollation `xml:"supported-collation"`
+}
+
+type SupportedCollation struct {
+	Value string `xml:",chardata"`
+}
+
+type SupportedReportSet struct {
+	SupportedReport []SupportedReport `xml:"supported-report"`
+}
+
+type SupportedReport struct {
+	Report ReportType `xml:"report"`
+}
+
+type ReportType struct {
+	CalendarQuery    *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-query,omitempty"`
+	CalendarMultiget *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-multiget,omitempty"`
+	FreeBusyQuery    *struct{} `xml:"urn:ietf:params:xml:ns:caldav free-busy-query,omitempty"`
+	SyncCollection   *struct{} `xml:"DAV: sync-collection,omitempty"`
 }
 
 type AclProp struct {
