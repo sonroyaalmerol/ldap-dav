@@ -13,7 +13,7 @@ import (
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/.well-known/caldav", h.HandleWellKnownCalDAV)
+	mux.HandleFunc("/.well-known/caldav", h.HandleWellKnown)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -54,20 +54,20 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interfac
 		case "REPORT":
 			h.HandleReport(w, r)
 		case http.MethodGet:
-			h.HandleGet(w, r)
+			h.CalDAVHandlers.HandleGet(w, r)
 		case http.MethodHead:
 			hrw := &headResponseWriter{ResponseWriter: w}
-			h.HandleGet(hrw, r)
+			h.CalDAVHandlers.HandleGet(hrw, r)
 		case http.MethodPut:
-			h.HandlePut(w, r)
+			h.CalDAVHandlers.HandlePut(w, r)
 		case http.MethodDelete:
-			h.HandleDelete(w, r)
+			h.CalDAVHandlers.HandleDelete(w, r)
 		case "MKCOL":
-			h.HandleMkcol(w, r)
+			h.CalDAVHandlers.HandleMkcol(w, r)
 		case "PROPPATCH":
-			h.HandleProppatch(w, r)
+			h.CalDAVHandlers.HandleProppatch(w, r)
 		case "ACL":
-			h.HandleACL(w, r)
+			h.CalDAVHandlers.HandleACL(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

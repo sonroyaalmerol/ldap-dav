@@ -1,4 +1,4 @@
-package dav
+package caldav
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
@@ -17,7 +18,7 @@ import (
 
 // HandleGet returns the raw iCalendar object by UID path.
 func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
+	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -25,7 +26,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	filename := rest[len(rest)-1]
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	if !safeSegment(calURI) || !safeSegment(uid) {
+	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -35,7 +36,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	pr := mustPrincipal(r.Context())
+	pr := common.MustPrincipal(r.Context())
 	if ok := h.mustCanRead(w, r.Context(), pr, calURI, calOwner); !ok {
 		return
 	}
@@ -45,7 +46,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ETag conditional GET
-	inm := trimQuotes(r.Header.Get("If-None-Match"))
+	inm := common.TrimQuotes(r.Header.Get("If-None-Match"))
 	if inm != "" && inm == obj.ETag {
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -61,7 +62,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandlePut creates or updates an iCalendar object and detects its component type.
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
+	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -73,7 +74,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	}
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	if !safeSegment(calURI) || !safeSegment(uid) {
+	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -90,7 +91,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		Str("calOwner", calOwner).
 		Msg("resolved calendar for PUT")
 
-	pr := mustPrincipal(r.Context())
+	pr := common.MustPrincipal(r.Context())
 
 	// ACL: owner or create/edit
 	if pr.UserID != calOwner {
@@ -136,7 +137,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	// Precondition headers
 	wantNew := r.Header.Get("If-None-Match") == "*"
-	match := trimQuotes(r.Header.Get("If-Match"))
+	match := common.TrimQuotes(r.Header.Get("If-Match"))
 
 	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
 	if wantNew && existing != nil {
@@ -175,7 +176,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete removes an iCalendar object by UID (respecting If-Match) and records a change.
 func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
+	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
 	if owner == "" || len(rest) == 0 {
 		http.NotFound(w, r)
 		return
@@ -183,7 +184,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	filename := rest[len(rest)-1]
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	if !safeSegment(calURI) || !safeSegment(uid) {
+	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -193,7 +194,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	pr := mustPrincipal(r.Context())
+	pr := common.MustPrincipal(r.Context())
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 		if err != nil || !eff.CanDelete() {
@@ -201,7 +202,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	match := trimQuotes(r.Header.Get("If-Match"))
+	match := common.TrimQuotes(r.Header.Get("If-Match"))
 	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
@@ -212,12 +213,12 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
+	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
-	pr := mustPrincipal(r.Context())
+	pr := common.MustPrincipal(r.Context())
 	if pr.UserID != owner {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -226,18 +227,18 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := h.splitCalendarPath(r.URL.Path)
+	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
 	if owner == "" || calURI == "" || len(rest) != 0 {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
-	if !safeSegment(calURI) {
+	if !common.SafeSegment(calURI) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
-	pr := mustPrincipal(r.Context())
+	pr := common.MustPrincipal(r.Context())
 	if pr.UserID != owner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 		if err != nil || !eff.CanEdit() {

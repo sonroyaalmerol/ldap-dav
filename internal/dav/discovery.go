@@ -4,7 +4,7 @@ import (
 	"net/http"
 )
 
-func (h *Handlers) HandleWellKnownCalDAV(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HandleWellKnown(w http.ResponseWriter, r *http.Request) {
 	// Redirect to base path per RFC 6764
 	http.Redirect(w, r, h.basePath+"/", http.StatusPermanentRedirect)
 }
