@@ -108,6 +108,10 @@ func TestIntegration(t *testing.T) {
 	t.Run("ErrorConditions", func(t *testing.T) {
 		testErrorConditions(t, client, baseURL, basePath, authz)
 	})
+
+	t.Run("LargeCollectionHandling", func(t *testing.T) {
+		testLargeCollectionHandling(t, client, baseURL, basePath, authz)
+	})
 }
 
 // Original tests preserved
@@ -1121,6 +1125,143 @@ func testErrorConditions(t *testing.T, client *http.Client, baseURL, basePath, a
 			if resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusNotImplemented {
 				t.Logf("method %s returned %d (expected 405 or 501)", method, resp.StatusCode)
 			}
+		}
+	})
+}
+
+func testLargeCollectionHandling(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
+	baseCalendarURL := baseURL + basePath + "/calendars/alice/shared/team/"
+
+	t.Run("CreateManyEvents", func(t *testing.T) {
+		// Create 100 events to simulate a large collection
+		numEvents := 1000
+		for i := 0; i < numEvents; i++ {
+			ics := fmt.Sprintf("BEGIN:VCALENDAR\r\n"+
+				"VERSION:2.0\r\n"+
+				"PRODID:-//ldap-dav//test//EN\r\n"+
+				"BEGIN:VEVENT\r\n"+
+				"UID:large-coll-evt-%d\r\n"+
+				"DTSTAMP:20250101T090000Z\r\n"+
+				"DTSTART:20250201T%02d0000Z\r\n"+
+				"DTEND:20250201T%02d0000Z\r\n"+
+				"SUMMARY:Large Collection Event %d\r\n"+
+				"END:VEVENT\r\n"+
+				"END:VCALENDAR\r\n", i, (i % 24), (i%24)+1, i)
+
+			url := baseCalendarURL + fmt.Sprintf("large-coll-evt-%d.ics", i)
+			req, _ := http.NewRequest("PUT", url, bytes.NewBufferString(ics))
+			req.Header.Set("Authorization", authz)
+			req.Header.Set("Content-Type", "text/calendar; charset=utf-8")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("create event %d: %v", i, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("create event %d status: %d", i, resp.StatusCode)
+			}
+
+			// Add small delay to avoid overwhelming server
+			if i%10 == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+
+	t.Run("QueryLargeCollection", func(t *testing.T) {
+		// Test PROPFIND on large collection
+		req, _ := http.NewRequest("PROPFIND", baseCalendarURL, nil)
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Depth", "1")
+		req.Header.Set("Content-Type", "application/xml")
+
+		start := time.Now()
+		resp, err := client.Do(req)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("propfind large collection: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 207 {
+			t.Fatalf("propfind large collection status: %d", resp.StatusCode)
+		}
+
+		// Check if server handles large collections reasonably quickly
+		if elapsed > 30*time.Second {
+			t.Logf("PROPFIND on large collection took %v - might be too slow for enterprise use", elapsed)
+		}
+	})
+
+	t.Run("CalendarQueryWithoutTimeRange", func(t *testing.T) {
+		// Test querying entire collection without time range
+		body := `<?xml version="1.0" encoding="utf-8" ?>
+<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+ <D:prop>
+  <D:getetag/>
+ </D:prop>
+ <C:filter>
+  <C:comp-filter name="VCALENDAR">
+   <C:comp-filter name="VEVENT"/>
+  </C:comp-filter>
+ </C:filter>
+</C:calendar-query>`
+
+		req, _ := http.NewRequest("REPORT", baseCalendarURL, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
+
+		start := time.Now()
+		resp, err := client.Do(req)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("calendar-query all events: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 207 {
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("calendar-query all events status: %d, body: %s", resp.StatusCode, string(b))
+		}
+
+		// Check server performance and possible truncation
+		if elapsed > 15*time.Second {
+			t.Logf("Calendar query without time range took %v - might be too slow", elapsed)
+		}
+	})
+
+	t.Run("SyncLargeCollection", func(t *testing.T) {
+		// Test sync-collection on large collection
+		body := `<?xml version="1.0" encoding="utf-8" ?>
+<D:sync-collection xmlns:D="DAV:">
+ <D:sync-token/>
+ <D:sync-level>1</D:sync-level>
+ <D:prop>
+  <D:getetag/>
+ </D:prop>
+</D:sync-collection>`
+
+		req, _ := http.NewRequest("REPORT", baseCalendarURL, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
+
+		start := time.Now()
+		resp, err := client.Do(req)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("sync large collection: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 207 {
+			t.Fatalf("sync large collection status: %d", resp.StatusCode)
+		}
+
+		if elapsed > 10*time.Second {
+			t.Logf("Sync collection took %v - might be too slow for large collections", elapsed)
 		}
 	})
 }
