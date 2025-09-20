@@ -148,6 +148,7 @@ func TestIntegration(t *testing.T) {
 		"PRODID:-//ldap-dav//test//EN\r\n" +
 		"BEGIN:VEVENT\r\n" +
 		"UID:evt1\r\n" +
+		"DTSTAMP:20250101T090000Z\r\n" +
 		"DTSTART:20250101T100000Z\r\n" +
 		"DTEND:20250101T110000Z\r\n" +
 		"SUMMARY:Test\r\n" +
