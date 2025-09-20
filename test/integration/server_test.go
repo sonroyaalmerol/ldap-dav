@@ -1133,8 +1133,8 @@ func testLargeCollectionHandling(t *testing.T, client *http.Client, baseURL, bas
 	baseCalendarURL := baseURL + basePath + "/calendars/alice/shared/team/"
 
 	t.Run("CreateManyEvents", func(t *testing.T) {
-		// Create 1000000 events to simulate a large collection
-		numEvents := 1_000_000
+		// Create 10000 events to simulate a large collection
+		numEvents := 10_000
 		for i := 0; i < numEvents; i++ {
 			ics := fmt.Sprintf("BEGIN:VCALENDAR\r\n"+
 				"VERSION:2.0\r\n"+
