@@ -1,0 +1,93 @@
+services:
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: ldap
+    environment:
+      LDAP_ORGANISATION: "Example Inc"
+      LDAP_DOMAIN: "example.com"
+      LDAP_ADMIN_PASSWORD: admin
+    ports:
+      - "389:389"
+    volumes:
+      # Custom schema + base data
+      - ./deploy/ldap/caldav-schema.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-caldav-schema.ldif:ro
+      - ./deploy/ldap/base.ldif:/container/service/slapd/assets/config/bootstrap/ldif/60-base.ldif:ro
+    healthcheck:
+      test: ["CMD", "ldapwhoami", "-x", "-H", "ldap://localhost:389", "-D", "cn=admin,dc=example,dc=com", "-w", "admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: caldav
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./internal/storage/postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d caldav"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ldap-dav:
+    image: ghcr.io/sonroyaalmerol/ldap-dav:latest
+    container_name: ldap-dav
+    depends_on:
+      ldap:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      # HTTP
+      HTTP_ADDR: ":8080"
+      HTTP_BASE_PATH: "/dav"
+      HTTP_MAX_ICS_BYTES: "1048576"
+      LOG_LEVEL: "info"
+
+      # LDAP
+      LDAP_URL: "ldap://ldap:389"
+      LDAP_BIND_DN: "cn=admin,dc=example,dc=com"
+      LDAP_BIND_PASSWORD: "admin"
+      LDAP_USER_BASE_DN: "ou=People,dc=example,dc=com"
+      LDAP_GROUP_BASE_DN: "ou=Groups,dc=example,dc=com"
+      LDAP_USER_FILTER: "(|(uid=%s)(mail=%s))"
+      LDAP_GROUP_FILTER: "(cn=%s)"
+      LDAP_MEMBER_ATTR: "member"
+      LDAP_CAL_IDS_ATTR: "caldavCalendars"
+      LDAP_PRIVS_ATTR: "caldavPrivileges"
+      LDAP_BINDINGS_ATTR: "caldavBindings" # compact form (recommended)
+      LDAP_TOKEN_USER_ATTR: "uid"
+      LDAP_NESTED: "false"
+
+      # Auth
+      AUTH_BASIC: "true"
+      AUTH_BEARER: "false"
+      AUTH_JWKS_URL: ""   # set if you enable bearer
+      AUTH_ISSUER: ""
+      AUTH_AUDIENCE: ""
+      AUTH_ALLOW_OPAQUE: "false"
+      AUTH_INTROSPECT_URL: ""
+      AUTH_INTROSPECT_AUTH: ""
+
+      # Postgres
+      PG_URL: "postgres://postgres:postgres@postgres:5432/caldav?sslmode=disable"
+
+      # Storage backend
+      STORAGE_TYPE: "postgres"    # or "filestore"
+      FILE_ROOT: "/data"          # used only if STORAGE_TYPE=filestore
+
+    ports:
+      - "8080:8080"
+    volumes:
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:

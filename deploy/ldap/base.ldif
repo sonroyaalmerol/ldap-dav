@@ -29,6 +29,7 @@ uid: bob
 mail: bob@example.com
 userPassword: password
 
+# Readers group (read-only on team calendar)
 dn: cn=team-cal-readers,ou=Groups,dc=example,dc=com
 objectClass: groupOfNames
 objectClass: caldavGroup
@@ -37,6 +38,7 @@ member: uid=alice,ou=People,dc=example,dc=com
 caldavCalendars: team
 caldavPrivileges: read
 
+# Editors group (full privileges via compact bindings)
 dn: cn=team-cal-editors,ou=Groups,dc=example,dc=com
 objectClass: groupOfNames
 objectClass: caldavGroup
