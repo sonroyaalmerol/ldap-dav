@@ -22,21 +22,24 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 		h.propfindPrincipal(w, r, depth)
 		return
 	}
-	if owner, cal, rest := h.CalDAVHandlers.SplitCalendarPath(r.URL.Path); owner != "" {
-		if len(rest) == 0 {
-			// calendar collection or home
-			if cal == "" {
-				// home set listing calendars
-				h.CalDAVHandlers.PropfindCalendarHome(w, r, owner, depth)
+
+	if common.IsCalendarUsers(r.URL.Path, h.basePath) {
+		if owner, cal, rest := h.CalDAVHandlers.SplitCalendarPath(r.URL.Path); owner != "" {
+			if len(rest) == 0 {
+				// calendar collection or home
+				if cal == "" {
+					// home set listing calendars
+					h.CalDAVHandlers.PropfindCalendarHome(w, r, owner, depth)
+					return
+				}
+				// calendar collection
+				h.CalDAVHandlers.PropfindCalendarCollection(w, r, owner, cal, depth)
 				return
 			}
-			// calendar collection
-			h.CalDAVHandlers.PropfindCalendarCollection(w, r, owner, cal, depth)
+			// object PROPFIND
+			h.CalDAVHandlers.PropfindCalendarObject(w, r, owner, cal, path.Base(r.URL.Path))
 			return
 		}
-		// object PROPFIND
-		h.CalDAVHandlers.PropfindCalendarObject(w, r, owner, cal, path.Base(r.URL.Path))
-		return
 	}
 
 	// Root DAV path
@@ -47,8 +50,8 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 				Props: []common.PropStat{{
 					Prop: common.Prop{
 						ResourceType:           common.MakeCollectionResourcetype(),
-						CurrentUserPrincipal:   &common.Href{Value: h.currentUserPrincipalHref(r.Context())},
-						PrincipalURL:           &common.Href{Value: h.currentUserPrincipalHref(r.Context())},
+						CurrentUserPrincipal:   &common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
+						PrincipalURL:           &common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
 						PrincipalCollectionSet: &common.Hrefs{Values: []string{common.JoinURL(h.basePath, "principals") + "/"}},
 					},
 					Status: common.Ok(),

@@ -1,13 +1,10 @@
 package dav
 
 import (
-	"context"
-
 	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
-	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 
@@ -36,12 +33,4 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 		basePath:       cfg.HTTP.BasePath,
 		CalDAVHandlers: *caldav.NewHandlers(cfg, store, dir, logger),
 	}
-}
-
-func (h *Handlers) currentUserPrincipalHref(ctx context.Context) string {
-	u, _ := common.CurrentUser(ctx)
-	if u == nil {
-		return common.JoinURL(h.basePath, "principals")
-	}
-	return common.PrincipalURL(h.basePath, u.UID)
 }

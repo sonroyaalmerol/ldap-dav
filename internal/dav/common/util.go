@@ -65,3 +65,5 @@ func MergeIntervalsFB(in []Interval) []Interval {
 func SafeSegment(s string) bool {
 	return s != "" && !strings.Contains(s, "/") && !strings.Contains(s, "\\") && !strings.Contains(s, "..")
 }
+
+func StrPtr(s string) *string { return &s }
