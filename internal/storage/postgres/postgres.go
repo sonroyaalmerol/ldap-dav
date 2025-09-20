@@ -105,11 +105,18 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 		obj.ETag = randID()
 	}
 	_, err := s.pool.Exec(ctx, `
-		insert into calendar_objects(id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at)
-		values ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, now())
+		insert into calendar_objects (
+			id, calendar_id, uid, etag, data, component, start_at, end_at
+		) values (
+			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
+		)
 		on conflict (calendar_id, uid) do update set
-			etag = excluded.etag, data = excluded.data, component = excluded.component,
-			start_at = excluded.start_at, end_at = excluded.end_at, updated_at = now()
+			etag = excluded.etag,
+			data = excluded.data,
+			component = excluded.component,
+			start_at = excluded.start_at,
+			end_at = excluded.end_at,
+			updated_at = now()
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
 	return err
 }
