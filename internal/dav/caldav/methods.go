@@ -1,9 +1,7 @@
 package caldav
 
 import (
-	"bytes"
 	"encoding/xml"
-	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -45,6 +43,7 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	// ETag conditional GET
 	inm := common.TrimQuotes(r.Header.Get("If-None-Match"))
 	if inm != "" && inm == obj.ETag {
@@ -115,15 +114,13 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect top-level component: VEVENT, VTODO, or VJOURNAL
-	compType, err := detectICSComponent(raw)
+	compType, err := ical.DetectICSComponent(raw)
 	if err != nil {
 		http.Error(w, "unsupported calendar component", http.StatusUnsupportedMediaType)
 		return
 	}
 
-	// Insert DTSTAMP if missing for VEVENT
-	if fixed, inserted := ensureDTStamp(raw); inserted {
+	if fixed, inserted := ical.EnsureDTStamp(raw); inserted {
 		raw = fixed
 	}
 
@@ -283,69 +280,6 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) HandleACL(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "ACLs managed via LDAP groups", http.StatusForbidden)
-}
-
-// detectICSComponent inspects the ICS payload to find the first top-level component
-// under VCALENDAR and returns one of: "VEVENT", "VTODO", "VJOURNAL".
-// It tolerates CRLF/CR/newlines and folded lines. It does not expand recurrence.
-func detectICSComponent(data []byte) (string, error) {
-	// Quick sanity check: must contain VCALENDAR wrapper
-	s := string(data)
-	if !containsFoldInsensitive(s, "BEGIN:VCALENDAR") || !containsFoldInsensitive(s, "END:VCALENDAR") {
-		return "", errors.New("not a VCALENDAR")
-	}
-
-	// Normalize newlines to \n for scanning
-	norm := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	norm = bytes.ReplaceAll(norm, []byte("\r"), []byte("\n"))
-	lines := bytes.Split(norm, []byte("\n"))
-
-	// Unfold lines (RFC5545): lines that begin with space or tab are continuations
-	var unf []string
-	for i := 0; i < len(lines); i++ {
-		line := string(lines[i])
-		if i == 0 {
-			unf = append(unf, line)
-			continue
-		}
-		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
-			// continuation of previous line (strip leading WSP)
-			if len(unf) == 0 {
-				unf = append(unf, strings.TrimLeft(line, " \t"))
-			} else {
-				unf[len(unf)-1] += strings.TrimLeft(line, " \t")
-			}
-		} else {
-			unf = append(unf, line)
-		}
-	}
-
-	// Scan inside VCALENDAR for first BEGIN:VEVENT|VTODO|VJOURNAL
-	inVC := false
-	for _, l := range unf {
-		ll := strings.TrimSpace(strings.ToUpper(l))
-		switch {
-		case ll == "BEGIN:VCALENDAR":
-			inVC = true
-		case ll == "END:VCALENDAR":
-			inVC = false
-		default:
-			if inVC {
-				if strings.HasPrefix(ll, "BEGIN:VEVENT") {
-					return "VEVENT", nil
-				}
-				if strings.HasPrefix(ll, "BEGIN:VTODO") {
-					return "VTODO", nil
-				}
-				if strings.HasPrefix(ll, "BEGIN:VJOURNAL") {
-					return "VJOURNAL", nil
-				}
-			}
-		}
-	}
-
-	// If none found, reject (we don't support other components like VFREEBUSY as stored objects)
-	return "", errors.New("unsupported component")
 }
 
 // containsFoldInsensitive checks if s contains token case-insensitively, tolerant of line folding.

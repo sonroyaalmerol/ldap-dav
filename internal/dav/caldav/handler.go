@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
@@ -12,6 +13,7 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
+	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
 type Handlers struct {
@@ -20,15 +22,22 @@ type Handlers struct {
 	aclProv  acl.Provider
 	logger   zerolog.Logger
 	basePath string
+	expander *ical.RecurrenceExpander
 }
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, logger zerolog.Logger) *Handlers {
+	tz, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		tz = time.UTC
+	}
+
 	return &Handlers{
 		cfg:      cfg,
 		store:    store,
 		aclProv:  acl.NewLDAPACL(dir),
 		logger:   logger,
 		basePath: cfg.HTTP.BasePath,
+		expander: ical.NewRecurrenceExpander(tz),
 	}
 }
 

@@ -49,10 +49,12 @@ type StorageConfig struct {
 }
 
 type Config struct {
+	Timezone string
 	HTTP     HTTPConfig
 	LDAP     LDAPConfig
 	Auth     AuthConfig
 	Storage  StorageConfig
+	ICS      ICSConfig
 	LogLevel string
 }
 
@@ -112,6 +114,13 @@ func Load() (*Config, error) {
 			PostgresURL: getenv("PG_URL", "postgres://postgres:postgres@localhost:5432/caldav?sslmode=disable"),
 			FileRoot:    getenv("FILE_ROOT", "./data"),
 		},
+		ICS: ICSConfig{
+			CompanyName: getenv("ICS_COMPANY_NAME", "LDAP DAV"),
+			ProductName: getenv("ICS_PRODUCT_NAME", "CalDAV"),
+			Version:     getenv("ICS_VERSION", "1.0.0"),
+			Language:    getenv("ICS_LANGUAGE", "EN"),
+		},
+		Timezone: getenv("TZ", "UTC"),
 		LogLevel: getenv("LOG_LEVEL", "info"),
 	}, nil
 }

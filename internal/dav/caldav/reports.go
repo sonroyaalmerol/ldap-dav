@@ -1,15 +1,14 @@
 package caldav
 
 import (
-	"io"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
+	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
 func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q common.CalendarQuery) {
@@ -24,9 +23,10 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 		return
 	}
 
-	props := parsePropRequest(q.Prop)
+	props := common.ParsePropRequest(q.Prop)
+
 	var start, end *time.Time
-	if tr := extractTimeRange(q.Filter); tr != nil {
+	if tr := common.ExtractTimeRange(q.Filter); tr != nil {
 		if tr.Start != "" {
 			if t, err := common.ParseICalTime(tr.Start); err == nil {
 				start = &t
@@ -38,7 +38,8 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 			}
 		}
 	}
-	comps := extractComponentFilterNames(q.Filter)
+
+	comps := common.ExtractComponentFilterNames(q.Filter)
 	if len(comps) == 0 {
 		comps = []string{"VEVENT", "VTODO", "VJOURNAL"}
 	}
@@ -48,16 +49,24 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
 	var resps []common.Response
-	for _, o := range objs {
-		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
-		resps = append(resps, buildReportResponse(hrefStr, props, o))
+
+	if start != nil && end != nil && common.ContainsComponent(comps, "VEVENT") {
+		resps = h.buildExpandedEventResponses(objs, *start, *end, props, owner, calURI)
+	} else {
+		// No time range or not querying events - return original objects
+		for _, o := range objs {
+			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
+			resps = append(resps, buildReportResponse(hrefStr, props, o))
+		}
 	}
+
 	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
-	props := parsePropRequest(mg.Prop)
+	props := common.ParsePropRequest(mg.Prop)
 	var resps []common.Response
 	for _, hrefStr := range mg.Hrefs {
 		owner, calURI, rest := h.SplitCalendarPath(hrefStr)
@@ -66,6 +75,9 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 		}
 		filename := rest[len(rest)-1]
 		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
+
+		uid = h.extractBaseUID(uid)
+
 		calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 		if err != nil {
 			continue
@@ -79,6 +91,15 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			continue
 		}
+
+		if h.isRecurringInstanceRequest(hrefStr) {
+			instanceResp := h.handleRecurringInstanceRequest(hrefStr, o, props)
+			if instanceResp != nil {
+				resps = append(resps, *instanceResp)
+			}
+			continue
+		}
+
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
 	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
@@ -108,7 +129,6 @@ func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Ob
 	}
 }
 
-// Sync with paging
 func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, sc common.SyncCollection) {
 	owner, calURI, _ := h.SplitCalendarPath(r.URL.Path)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
@@ -129,7 +149,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 
 	sinceSeq := int64(0)
 	if sc.SyncToken != "" {
-		if ss, ok := parseSeqToken(sc.SyncToken); ok {
+		if ss, ok := common.ParseSeqToken(sc.SyncToken); ok {
 			sinceSeq = ss
 		}
 	}
@@ -187,11 +207,9 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	// NOTE: number-of-matches-within-limits omission explained in previous message.
 	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
-// Free-busy REPORT (simplified, no recurrence expansion)
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {
 	owner, calURI, _ := h.SplitCalendarPath(r.URL.Path)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
@@ -223,98 +241,68 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	// Collect VEVENTs overlapping [start,end]
+	// Get VEVENTs and expand recurrences for free/busy calculation
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
-	var busy []common.Interval
+	var busy []ical.Interval
+	expander := ical.NewRecurrenceExpander(time.UTC)
+
 	for _, o := range objs {
-		if o.StartAt != nil && o.EndAt != nil {
-			if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
-				s := common.MaxTime(*o.StartAt, start)
-				e := common.MinTime(*o.EndAt, end)
+		if o.Component != "VEVENT" {
+			continue
+		}
+
+		// Parse and expand recurring events
+		events, err := ical.ParseCalendar([]byte(o.Data))
+		if err != nil {
+			// Fall back to using object's stored start/end times
+			if o.StartAt != nil && o.EndAt != nil {
+				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
+					s := common.MaxTime(*o.StartAt, start)
+					e := common.MinTime(*o.EndAt, end)
+					if e.After(s) {
+						busy = append(busy, ical.Interval{S: s, E: e})
+					}
+				}
+			}
+			continue
+		}
+
+		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
+		if err != nil {
+			// Fall back to stored times
+			if o.StartAt != nil && o.EndAt != nil {
+				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
+					s := common.MaxTime(*o.StartAt, start)
+					e := common.MinTime(*o.EndAt, end)
+					if e.After(s) {
+						busy = append(busy, ical.Interval{S: s, E: e})
+					}
+				}
+			}
+			continue
+		}
+
+		// Add busy periods from all expanded instances
+		for _, event := range expandedEvents {
+			if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
+				s := common.MaxTime(event.Start, start)
+				e := common.MinTime(event.End, end)
 				if e.After(s) {
-					busy = append(busy, common.Interval{S: s, E: e})
+					busy = append(busy, ical.Interval{S: s, E: e})
 				}
 			}
 		}
 	}
+
 	busy = common.MergeIntervalsFB(busy)
 
-	var sb strings.Builder
-	sb.WriteString("BEGIN:VCALENDAR\r\n")
-	sb.WriteString("PRODID:-//example.com//caldav//EN\r\n")
-	sb.WriteString("VERSION:2.0\r\n")
-	sb.WriteString("BEGIN:VFREEBUSY\r\n")
-	sb.WriteString("DTSTART:" + start.UTC().Format("20060102T150405Z") + "\r\n")
-	sb.WriteString("DTEND:" + end.UTC().Format("20060102T150405Z") + "\r\n")
-	for _, iv := range busy {
-		sb.WriteString("FREEBUSY:")
-		sb.WriteString(iv.S.UTC().Format("20060102T150405Z"))
-		sb.WriteString("/")
-		sb.WriteString(iv.E.UTC().Format("20060102T150405Z"))
-		sb.WriteString("\r\n")
-	}
-	sb.WriteString("END:VFREEBUSY\r\n")
-	sb.WriteString("END:VCALENDAR\r\n")
+	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	_, _ = io.WriteString(w, sb.String())
-}
-
-// helpers for reports
-
-func extractTimeRange(f common.CalendarFilter) *common.TimeRange {
-	c := &f.CompFilter
-	for c != nil {
-		if c.TimeRange != nil {
-			return c.TimeRange
-		}
-		c = c.CompFilter
-	}
-	return nil
-}
-
-func extractComponentFilterNames(f common.CalendarFilter) []string {
-	names := []string{}
-	c := &f.CompFilter
-	for c != nil {
-		if c.Name != "" {
-			switch strings.ToUpper(c.Name) {
-			case "VCALENDAR":
-				// skip; descend
-			case "VEVENT", "VTODO", "VJOURNAL":
-				names = append(names, strings.ToUpper(c.Name))
-			}
-		}
-		c = c.CompFilter
-	}
-	return names
-}
-
-func parsePropRequest(_ common.PropContainer) common.PropRequest {
-	// Default to returning calendar-data and etag for compatibility
-	return common.PropRequest{
-		GetETag:      true,
-		CalendarData: true,
-	}
-}
-
-func parseSeqToken(tok string) (int64, bool) {
-	tok = strings.TrimSpace(tok)
-	if strings.HasPrefix(tok, "seq:") {
-		v := strings.TrimPrefix(tok, "seq:")
-		if v == "" {
-			return 0, false
-		}
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	}
-	return 0, false
+	w.Write(icsData)
 }
