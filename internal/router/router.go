@@ -8,7 +8,6 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
-	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
@@ -55,34 +54,20 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interfac
 		case "REPORT":
 			h.HandleReport(w, r)
 		case http.MethodGet:
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandleGet(w, r)
-			}
+			h.CalDAVHandlers.HandleGet(w, r)
 		case http.MethodHead:
-			if common.IsCalendarPath(r.URL.Path, base) {
-				hrw := &headResponseWriter{ResponseWriter: w}
-				h.CalDAVHandlers.HandleGet(hrw, r)
-			}
+			hrw := &headResponseWriter{ResponseWriter: w}
+			h.CalDAVHandlers.HandleGet(hrw, r)
 		case http.MethodPut:
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandlePut(w, r)
-			}
+			h.CalDAVHandlers.HandlePut(w, r)
 		case http.MethodDelete:
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandleDelete(w, r)
-			}
+			h.CalDAVHandlers.HandleDelete(w, r)
 		case "MKCOL":
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandleMkcol(w, r)
-			}
+			h.CalDAVHandlers.HandleMkcol(w, r)
 		case "PROPPATCH":
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandleProppatch(w, r)
-			}
+			h.CalDAVHandlers.HandleProppatch(w, r)
 		case "ACL":
-			if common.IsCalendarPath(r.URL.Path, base) {
-				h.CalDAVHandlers.HandleACL(w, r)
-			}
+			h.CalDAVHandlers.HandleACL(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
