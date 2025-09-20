@@ -23,6 +23,7 @@ Key features
 - Storage: PostgreSQL (calendars, objects, change log) with recommended indexes
 - Read-only WebDAV ACL properties surfaced on collections to reflect effective privileges
 - Configurable max ICS upload size
+- Recurrence expansion server-side for time-range queries (RRULE/RDATE/EXDATE)
 - HEAD is supported everywhere GET is, returning headers without body
 
 ## Quick start (Docker)
@@ -156,7 +157,6 @@ Methods
 ## Roadmap
 
 - Scheduling (RFC 6638): inbox/outbox resources, iTIP processing, delivery
-- Recurrence expansion server-side for time-range queries (RRULE/RDATE/EXDATE)
 - Nested LDAP groups resolution (configurable depth)
 - More complete number-of-matches-within-limits
 - CardDAV (/.well-known/carddav)

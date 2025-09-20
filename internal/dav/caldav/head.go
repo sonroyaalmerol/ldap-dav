@@ -1,4 +1,4 @@
-package router
+package caldav
 
 import "net/http"
 

@@ -14,6 +14,15 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
+func (h *Handlers) GetCapabilities() string {
+	return "calendar-access"
+}
+
+func (h *Handlers) HandleHead(w http.ResponseWriter, r *http.Request) {
+	hrw := &headResponseWriter{ResponseWriter: w}
+	h.HandleGet(hrw, r)
+}
+
 // HandleGet returns the raw iCalendar object by UID path.
 func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := h.SplitCalendarPath(r.URL.Path)
@@ -280,9 +289,4 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) HandleACL(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "ACLs managed via LDAP groups", http.StatusForbidden)
-}
-
-// containsFoldInsensitive checks if s contains token case-insensitively, tolerant of line folding.
-func containsFoldInsensitive(s, token string) bool {
-	return strings.Contains(strings.ToUpper(s), strings.ToUpper(token))
 }
