@@ -143,7 +143,16 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// PUT event into bob/team as alice (should be allowed via editors group)
-	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20250101T100000Z\r\nDTEND:20250101T110000Z\r\nSUMMARY:Test\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	ics := "BEGIN:VCALENDAR\r\n" +
+		"VERSION:2.0\r\n" +
+		"PRODID:-//ldap-dav//test//EN\r\n" +
+		"BEGIN:VEVENT\r\n" +
+		"UID:evt1\r\n" +
+		"DTSTART:20250101T100000Z\r\n" +
+		"DTEND:20250101T110000Z\r\n" +
+		"SUMMARY:Test\r\n" +
+		"END:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
 	{
 		url := baseURL + basePath + "/calendars/alice/shared/team/evt1.ics"
 		req, _ := http.NewRequest("PUT", url, bytes.NewBufferString(ics))

@@ -117,6 +117,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	// Normalize ICS
 	ics, err := ical.NormalizeICS(raw)
 	if err != nil {
+		h.logger.Error().Err(err).Bytes("raw_ics", raw).Msg("normalize ics failed")
 		http.Error(w, "invalid ical", http.StatusBadRequest)
 		return
 	}
