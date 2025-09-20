@@ -117,6 +117,9 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 }
 
 func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *http.Request, owner, collection, depth string) {
+	// owner here is the path owner (requester UID in /calendars/{owner}/...)
+	requesterUID := owner
+
 	// Resolve calendar by owner+uri
 	cals, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
 	if err != nil {
@@ -130,6 +133,22 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 			break
 		}
 	}
+
+	// If not owned and not the "shared" container, try shared mount resolution
+	var trueOwner string
+	isSharedMount := false
+	if cal == nil && collection != "shared" {
+		if sc, err := c.handlers.findCalendarByURI(r.Context(), collection); err == nil && sc != nil {
+			// ACL for the requester against the calendar URI
+			pr := common.MustPrincipal(r.Context())
+			if ok, err := c.handlers.aclCheckRead(r.Context(), pr, sc.URI, sc.OwnerUserID); err == nil && ok {
+				cal = sc
+				trueOwner = sc.OwnerUserID
+				isSharedMount = true
+			}
+		}
+	}
+
 	// Shared container itself
 	if cal == nil && collection == "shared" {
 		resps := []common.Response{{
@@ -148,10 +167,24 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Determine Href and Owner for the response
+	var href string
+	var ownerHref string
+	if isSharedMount {
+		// Href should be the mount path under the requester’s shared container
+		href = common.JoinURL(sharedRoot(c.basePath, requesterUID), collection) + "/"
+		// Owner should be the canonical principal of the true owner
+		ownerHref = common.PrincipalURL(c.basePath, trueOwner)
+	} else {
+		// Owned calendar
+		href = calendarPath(c.basePath, owner, collection)
+		ownerHref = common.PrincipalURL(c.basePath, owner)
+	}
+
 	prop := common.Prop{
 		ResourceType:                  common.MakeCalendarResourcetype(),
 		DisplayName:                   &cal.DisplayName,
-		Owner:                         &common.Href{Value: common.PrincipalURL(c.basePath, owner)},
+		Owner:                         &common.Href{Value: ownerHref},
 		SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
 		GetCTag:                       &cal.CTag,
 		SyncToken:                     &cal.CTag,
@@ -179,7 +212,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 
 	// Depth 0: collection props
 	resps := []common.Response{{
-		Href:  calendarPath(c.basePath, owner, collection),
+		Href:  href,
 		Props: []common.PropStat{{Prop: prop, Status: common.Ok()}},
 	}}
 
