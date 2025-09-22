@@ -585,9 +585,18 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			t.Fatalf("basic MKCALENDAR status: %d", resp.StatusCode)
 		}
 
-		// Verify calendar was created by doing PROPFIND
-		req, _ = http.NewRequest("PROPFIND", url, nil)
+		// Verify calendar was created by doing PROPFIND with specific properties
+		propfindBody := `<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <D:resourcetype/>
+    <D:displayname/>
+  </D:prop>
+</D:propfind>`
+
+		req, _ = http.NewRequest("PROPFIND", url, bytes.NewBufferString(propfindBody))
 		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
 		req.Header.Set("Depth", "0")
 		resp, err = client.Do(req)
 		if err != nil {
@@ -599,8 +608,17 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			b, _ := io.ReadAll(resp.Body)
 			t.Fatalf("verify basic calendar status: %d, body: %s", resp.StatusCode, string(b))
 		}
+
+		// Check that response contains calendar resourcetype
+		respBody, _ := io.ReadAll(resp.Body)
+		respStr := string(respBody)
+
+		if !strings.Contains(respStr, "calendar") {
+			t.Fatalf("created resource is not a calendar: %s", respStr)
+		}
 	})
 
+	// Test basic MKCOL with calendar resourcetype
 	t.Run("BasicMkCol", func(t *testing.T) {
 		calendarName := "test-calendar-mkcol"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
@@ -631,10 +649,40 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			t.Fatalf("basic MKCOL status: %d", resp.StatusCode)
 		}
 
+		// Verify calendar was created by doing PROPFIND with specific properties
+		propfindBody := `<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <D:resourcetype/>
+    <D:displayname/>
+  </D:prop>
+</D:propfind>`
+
+		req, _ = http.NewRequest("PROPFIND", url, bytes.NewBufferString(propfindBody))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		resp, err = client.Do(req)
+		if err != nil {
+			t.Fatalf("verify MKCOL calendar: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 207 {
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("verify MKCOL calendar status: %d, body: %s", resp.StatusCode, string(b))
+		}
+
 		// Check that response contains calendar resourcetype
 		respBody, _ := io.ReadAll(resp.Body)
-		if !bytes.Contains(respBody, []byte("calendar")) {
-			t.Fatalf("created resource is not a calendar: %s", string(respBody))
+		respStr := string(respBody)
+		t.Logf("PROPFIND response: %s", respStr)
+
+		if !strings.Contains(respStr, "calendar") {
+			t.Fatalf("created resource is not a calendar: %s", respStr)
+		}
+		if !strings.Contains(respStr, "MKCOL Test Calendar") {
+			t.Fatalf("displayname not set correctly: %s", respStr)
 		}
 	})
 
@@ -739,12 +787,15 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	// Test MKCALENDAR with invalid path
 	t.Run("MkCalendarInvalidPath", func(t *testing.T) {
-		// Try to create calendar with invalid characters
+		// Try to create calendar with actually problematic paths
 		invalidNames := []string{
 			"calendar/../invalid",
-			"calendar with spaces",
 			"calendar/nested/path",
-			"",
+			"..",
+			".",
+			"calendar\x00null",
+			"calendar\nnewline",
+			"calendar\ttab",
 		}
 
 		for _, invalidName := range invalidNames {
@@ -759,8 +810,22 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 			// Should return 4xx error for invalid path
 			if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-				t.Logf("MKCALENDAR with invalid path '%s' returned %d (expected 4xx)", invalidName, resp.StatusCode)
+				t.Errorf("MKCALENDAR with invalid path '%s' returned %d (expected 4xx)", invalidName, resp.StatusCode)
 			}
+		}
+
+		// Test empty calendar name specifically
+		emptyURL := baseURL + basePath + "/calendars/alice//"
+		req, _ := http.NewRequest("MKCALENDAR", emptyURL, nil)
+		req.Header.Set("Authorization", authz)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("MKCALENDAR empty name: %v", err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+			t.Errorf("MKCALENDAR with empty name returned %d (expected 4xx)", resp.StatusCode)
 		}
 	})
 
