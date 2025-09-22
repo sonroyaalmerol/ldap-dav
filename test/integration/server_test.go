@@ -568,7 +568,21 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 }
 
 func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
-	// Test basic MKCALENDAR without properties
+	// Helper to do PROPFIND Depth:0 and return body as string
+	doPropfind := func(url string, body string) (int, string, error) {
+		req, _ := http.NewRequest("PROPFIND", url, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), nil
+	}
+
 	t.Run("BasicMkCalendar", func(t *testing.T) {
 		calendarName := "test-calendar-basic"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
@@ -579,13 +593,13 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		if err != nil {
 			t.Fatalf("basic MKCALENDAR: %v", err)
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("basic MKCALENDAR status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("basic MKCALENDAR status: %d body=%s", resp.StatusCode, string(b))
 		}
 
-		// Verify calendar was created by doing PROPFIND with specific properties
 		propfindBody := `<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop>
@@ -594,31 +608,18 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
   </D:prop>
 </D:propfind>`
 
-		req, _ = http.NewRequest("PROPFIND", url, bytes.NewBufferString(propfindBody))
-		req.Header.Set("Authorization", authz)
-		req.Header.Set("Content-Type", "application/xml")
-		req.Header.Set("Depth", "0")
-		resp, err = client.Do(req)
+		code, bodyStr, err := doPropfind(url, propfindBody)
 		if err != nil {
 			t.Fatalf("verify basic calendar: %v", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 207 {
-			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("verify basic calendar status: %d, body: %s", resp.StatusCode, string(b))
+		if code != 207 {
+			t.Fatalf("verify basic calendar status: %d, body: %s", code, bodyStr)
 		}
-
-		// Check that response contains calendar resourcetype
-		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-
-		if !strings.Contains(respStr, "calendar") {
-			t.Fatalf("created resource is not a calendar: %s", respStr)
+		if !strings.Contains(bodyStr, "calendar") {
+			t.Fatalf("created resource is not a calendar: %s", bodyStr)
 		}
 	})
 
-	// Test basic MKCOL with calendar resourcetype
 	t.Run("BasicMkCol", func(t *testing.T) {
 		calendarName := "test-calendar-mkcol"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
@@ -643,13 +644,13 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		if err != nil {
 			t.Fatalf("basic MKCOL: %v", err)
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("basic MKCOL status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("basic MKCOL status: %d body=%s", resp.StatusCode, string(b))
 		}
 
-		// Verify calendar was created by doing PROPFIND with specific properties
 		propfindBody := `<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop>
@@ -658,35 +659,21 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
   </D:prop>
 </D:propfind>`
 
-		req, _ = http.NewRequest("PROPFIND", url, bytes.NewBufferString(propfindBody))
-		req.Header.Set("Authorization", authz)
-		req.Header.Set("Content-Type", "application/xml")
-		req.Header.Set("Depth", "0")
-		resp, err = client.Do(req)
+		code, bodyStr, err := doPropfind(url, propfindBody)
 		if err != nil {
 			t.Fatalf("verify MKCOL calendar: %v", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 207 {
-			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("verify MKCOL calendar status: %d, body: %s", resp.StatusCode, string(b))
+		if code != 207 {
+			t.Fatalf("verify MKCOL calendar status: %d, body: %s", code, bodyStr)
 		}
-
-		// Check that response contains calendar resourcetype
-		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-		t.Logf("PROPFIND response: %s", respStr)
-
-		if !strings.Contains(respStr, "calendar") {
-			t.Fatalf("created resource is not a calendar: %s", respStr)
+		if !strings.Contains(bodyStr, "calendar") {
+			t.Fatalf("created resource is not a calendar: %s", bodyStr)
 		}
-		if !strings.Contains(respStr, "MKCOL Test Calendar") {
-			t.Fatalf("displayname not set correctly: %s", respStr)
+		if !strings.Contains(bodyStr, "MKCOL Test Calendar") {
+			t.Fatalf("displayname not set correctly: %s", bodyStr)
 		}
 	})
 
-	// Test MKCALENDAR with properties
 	t.Run("MkCalendarWithProperties", func(t *testing.T) {
 		calendarName := "test-calendar-props"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
@@ -708,13 +695,13 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		if err != nil {
 			t.Fatalf("MKCALENDAR with properties: %v", err)
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("MKCALENDAR with properties status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("MKCALENDAR with properties status: %d body=%s", resp.StatusCode, string(b))
 		}
 
-		// Verify properties were set
 		propfindBody := `<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop>
@@ -724,70 +711,55 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
   </D:prop>
 </D:propfind>`
 
-		req, _ = http.NewRequest("PROPFIND", url, bytes.NewBufferString(propfindBody))
-		req.Header.Set("Authorization", authz)
-		req.Header.Set("Content-Type", "application/xml")
-		req.Header.Set("Depth", "0")
-		resp, err = client.Do(req)
+		code, bodyStr, err := doPropfind(url, propfindBody)
 		if err != nil {
 			t.Fatalf("verify calendar properties: %v", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 207 {
-			t.Fatalf("verify calendar properties status: %d", resp.StatusCode)
+		if code != 207 {
+			t.Fatalf("verify calendar properties status: %d", code)
 		}
-
-		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-
-		// Verify displayname and description were set
-		if !strings.Contains(respStr, "My Test Calendar") {
-			t.Fatalf("displayname not set correctly: %s", respStr)
+		if !strings.Contains(bodyStr, "My Test Calendar") {
+			t.Fatalf("displayname not set correctly: %s", bodyStr)
 		}
-		if !strings.Contains(respStr, "A calendar created via MKCALENDAR") {
-			t.Fatalf("calendar-description not set correctly: %s", respStr)
+		if !strings.Contains(bodyStr, "A calendar created via MKCALENDAR") {
+			t.Fatalf("calendar-description not set correctly: %s", bodyStr)
 		}
-		if !strings.Contains(respStr, "calendar") {
-			t.Fatalf("resourcetype not calendar: %s", respStr)
+		if !strings.Contains(bodyStr, "calendar") {
+			t.Fatalf("resourcetype not calendar: %s", bodyStr)
 		}
 	})
 
-	// Test MKCALENDAR conflict (calendar already exists)
 	t.Run("MkCalendarConflict", func(t *testing.T) {
 		calendarName := "test-calendar-conflict"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
 
-		// Create calendar first time
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
 		req.Header.Set("Authorization", authz)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("first MKCALENDAR: %v", err)
 		}
-		resp.Body.Close()
-
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("first MKCALENDAR status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("first MKCALENDAR status: %d body=%s", resp.StatusCode, string(b))
 		}
 
-		// Try to create same calendar again - should fail
-		req, _ = http.NewRequest("MKCALENDAR", url, nil)
-		req.Header.Set("Authorization", authz)
-		resp, err = client.Do(req)
+		req2, _ := http.NewRequest("MKCALENDAR", url, nil)
+		req2.Header.Set("Authorization", authz)
+		resp2, err := client.Do(req2)
 		if err != nil {
 			t.Fatalf("second MKCALENDAR: %v", err)
 		}
-		resp.Body.Close()
+		defer resp2.Body.Close()
 
-		if resp.StatusCode != http.StatusConflict {
-			t.Fatalf("expected 409 Conflict for duplicate calendar, got: %d", resp.StatusCode)
+		if resp2.StatusCode != http.StatusConflict {
+			b, _ := io.ReadAll(resp2.Body)
+			t.Fatalf("expected 409 Conflict, got: %d body=%s", resp2.StatusCode, string(b))
 		}
 	})
 
-	// Test MKCALENDAR with invalid path
 	t.Run("MkCalendarInvalidPath", func(t *testing.T) {
-		// Try to create calendar with actually problematic paths
 		invalidNames := []string{
 			"calendar/../invalid",
 			"calendar/nested/path",
@@ -804,17 +776,17 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			req.Header.Set("Authorization", authz)
 			resp, err := client.Do(req)
 			if err != nil {
-				t.Fatalf("MKCALENDAR invalid path %s: %v", invalidName, err)
+				t.Fatalf("MKCALENDAR invalid path %q: %v", invalidName, err)
 			}
-			resp.Body.Close()
-
-			// Should return 4xx error for invalid path
-			if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-				t.Errorf("MKCALENDAR with invalid path '%s' returned %d (expected 4xx)", invalidName, resp.StatusCode)
-			}
+			func() {
+				defer resp.Body.Close()
+				if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+					b, _ := io.ReadAll(resp.Body)
+					t.Errorf("invalid path %q returned %d body=%s (expected 4xx)", invalidName, resp.StatusCode, string(b))
+				}
+			}()
 		}
 
-		// Test empty calendar name specifically
 		emptyURL := baseURL + basePath + "/calendars/alice//"
 		req, _ := http.NewRequest("MKCALENDAR", emptyURL, nil)
 		req.Header.Set("Authorization", authz)
@@ -822,65 +794,58 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		if err != nil {
 			t.Fatalf("MKCALENDAR empty name: %v", err)
 		}
-		resp.Body.Close()
-
+		defer resp.Body.Close()
 		if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-			t.Errorf("MKCALENDAR with empty name returned %d (expected 4xx)", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Errorf("empty name returned %d body=%s (expected 4xx)", resp.StatusCode, string(b))
 		}
 	})
 
-	// Test MKCALENDAR permission denied (try to create in another user's space)
 	t.Run("MkCalendarPermissionDenied", func(t *testing.T) {
-		// Try to create calendar in bob's space as alice
 		url := baseURL + basePath + "/calendars/bob/unauthorized-calendar/"
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
-		req.Header.Set("Authorization", authz) // alice's auth
+		req.Header.Set("Authorization", authz)
 		resp, err := client.Do(req)
 		if err != nil {
-			t.Fatalf("MKCALENDAR permission denied: %v", err)
+			t.Fatalf("permission denied test request: %v", err)
 		}
-		resp.Body.Close()
-
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("expected 403 Forbidden for unauthorized calendar creation, got: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 403 Forbidden, got %d body=%s", resp.StatusCode, string(b))
 		}
 	})
 
-	// Test MKCALENDAR without authentication
 	t.Run("MkCalendarUnauthenticated", func(t *testing.T) {
 		url := baseURL + basePath + "/calendars/alice/unauth-calendar/"
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
-		// No Authorization header
 		resp, err := client.Do(req)
 		if err != nil {
-			t.Fatalf("MKCALENDAR unauthenticated: %v", err)
+			t.Fatalf("unauthenticated request: %v", err)
 		}
-		resp.Body.Close()
-
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("expected 401 Unauthorized for unauthenticated MKCALENDAR, got: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 401 Unauthorized, got %d body=%s", resp.StatusCode, string(b))
 		}
 	})
 
-	// Test using created calendar for events
 	t.Run("UseCreatedCalendar", func(t *testing.T) {
 		calendarName := "test-calendar-usage"
 		calendarURL := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
 
-		// Create calendar
 		req, _ := http.NewRequest("MKCALENDAR", calendarURL, nil)
 		req.Header.Set("Authorization", authz)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("create calendar for usage test: %v", err)
 		}
-		resp.Body.Close()
-
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("create calendar for usage status: %d", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("create calendar for usage status: %d body=%s", resp.StatusCode, string(b))
 		}
 
-		// Add event to created calendar
 		ics := "BEGIN:VCALENDAR\r\n" +
 			"VERSION:2.0\r\n" +
 			"PRODID:-//ldap-dav//test//EN\r\n" +
@@ -894,20 +859,19 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			"END:VCALENDAR\r\n"
 
 		eventURL := calendarURL + "test-event-in-new-calendar.ics"
-		req, _ = http.NewRequest("PUT", eventURL, bytes.NewBufferString(ics))
-		req.Header.Set("Authorization", authz)
-		req.Header.Set("Content-Type", "text/calendar; charset=utf-8")
-		resp, err = client.Do(req)
+		req2, _ := http.NewRequest("PUT", eventURL, bytes.NewBufferString(ics))
+		req2.Header.Set("Authorization", authz)
+		req2.Header.Set("Content-Type", "text/calendar; charset=utf-8")
+		resp2, err := client.Do(req2)
 		if err != nil {
 			t.Fatalf("add event to new calendar: %v", err)
 		}
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("add event to new calendar status: %d", resp.StatusCode)
+		defer resp2.Body.Close()
+		if resp2.StatusCode != http.StatusCreated && resp2.StatusCode != http.StatusNoContent {
+			b, _ := io.ReadAll(resp2.Body)
+			t.Fatalf("add event to new calendar status: %d body=%s", resp2.StatusCode, string(b))
 		}
 
-		// Query calendar for events
 		queryBody := `<?xml version="1.0" encoding="utf-8" ?>
 <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
  <D:prop>
@@ -921,26 +885,24 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
  </C:filter>
 </C:calendar-query>`
 
-		req, _ = http.NewRequest("REPORT", calendarURL, bytes.NewBufferString(queryBody))
-		req.Header.Set("Authorization", authz)
-		req.Header.Set("Content-Type", "application/xml")
-		resp, err = client.Do(req)
+		req3, _ := http.NewRequest("REPORT", calendarURL, bytes.NewBufferString(queryBody))
+		req3.Header.Set("Authorization", authz)
+		req3.Header.Set("Content-Type", "application/xml")
+		resp3, err := client.Do(req3)
 		if err != nil {
 			t.Fatalf("query new calendar: %v", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 207 {
-			t.Fatalf("query new calendar status: %d", resp.StatusCode)
+		defer resp3.Body.Close()
+		if resp3.StatusCode != 207 {
+			b, _ := io.ReadAll(resp3.Body)
+			t.Fatalf("query new calendar status: %d body=%s", resp3.StatusCode, string(b))
 		}
-
-		respBody, _ := io.ReadAll(resp.Body)
-		if !bytes.Contains(respBody, []byte("Event in New Calendar")) {
-			t.Fatalf("event not found in new calendar: %s", string(respBody))
+		b3, _ := io.ReadAll(resp3.Body)
+		if !bytes.Contains(b3, []byte("Event in New Calendar")) {
+			t.Fatalf("event not found in new calendar: %s", string(b3))
 		}
 	})
 
-	// Test MKCALENDAR with malformed XML
 	t.Run("MkCalendarMalformedXML", func(t *testing.T) {
 		url := baseURL + basePath + "/calendars/alice/malformed-xml-test/"
 
@@ -960,12 +922,12 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		if err != nil {
 			t.Fatalf("MKCALENDAR malformed XML: %v", err)
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
-		// Should still create calendar (XML parsing is optional for MKCALENDAR)
-		// But if XML is provided and malformed, it might return an error
+		// Accept either 201 (created, ignore malformed) or 400 (reject malformed)
 		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusBadRequest {
-			t.Logf("MKCALENDAR with malformed XML returned %d (could be 201 or 400)", resp.StatusCode)
+			b, _ := io.ReadAll(resp.Body)
+			t.Logf("MKCALENDAR malformed XML returned %d body=%s (could be 201 or 400)", resp.StatusCode, string(b))
 		}
 	})
 }
