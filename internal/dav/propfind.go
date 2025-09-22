@@ -108,10 +108,15 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, dep
 }
 
 func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request) {
+	href := r.URL.Path
+	if !strings.HasSuffix(href, "/") {
+		href += "/"
+	}
+
 	ms := common.MultiStatus{
 		Resp: []common.Response{
 			{
-				Href: r.URL.Path,
+				Href: href,
 				Props: []common.PropStat{{
 					Prop: common.Prop{
 						ResourceType:           common.MakeCollectionResourcetype(),

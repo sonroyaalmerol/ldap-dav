@@ -27,7 +27,7 @@ type Prop struct {
 	DisplayName                   *string           `xml:"displayname,omitempty"`
 	CurrentUserPrincipal          *Href             `xml:"current-user-principal>href,omitempty"`
 	PrincipalURL                  *Href             `xml:"principal-URL>href,omitempty"`
-	PrincipalCollectionSet        *Hrefs            `xml:"principal-collection-set>href,omitempty"`
+	PrincipalCollectionSet        *Hrefs            `xml:"principal-collection-set,omitempty"`
 	CalendarHomeSet               *Href             `xml:"urn:ietf:params:xml:ns:caldav calendar-home-set>href,omitempty"`
 	SupportedCalendarComponentSet *SupportedCompSet `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-component-set,omitempty"`
 	Owner                         *Href             `xml:"owner>href,omitempty"`
