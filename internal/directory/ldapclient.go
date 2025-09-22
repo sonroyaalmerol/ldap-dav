@@ -2,9 +2,11 @@ package directory
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,7 +23,6 @@ type Directory interface {
 	BindUser(ctx context.Context, username, password string) (*User, error)
 	LookupUserByAttr(ctx context.Context, attr, value string) (*User, error)
 	UserGroupsACL(ctx context.Context, user *User) ([]GroupACL, error)
-	// Optional token introspection
 	IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error)
 }
 
@@ -33,12 +34,13 @@ type LDAPClient struct {
 }
 
 func NewLDAPClient(cfg config.LDAPConfig, logger zerolog.Logger) (*LDAPClient, error) {
-	l, err := ldap.DialURL(cfg.URL)
+	l, err := dialLDAPAuto(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if cfg.BindDN != "" {
 		if err := l.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
+			l.Close()
 			return nil, err
 		}
 	}
@@ -53,7 +55,6 @@ func (l *LDAPClient) Close() {
 }
 
 func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*User, error) {
-	// Find user DN by uid/mail
 	searchReq := ldap.NewSearchRequest(
 		l.cfg.UserBaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
@@ -68,8 +69,7 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 	entry := res.Entries[0]
 	userDN := entry.DN
 
-	// Try bind with user DN
-	userConn, err := ldap.DialURL(l.cfg.URL)
+	userConn, err := dialLDAPAuto(l.cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +109,10 @@ func (l *LDAPClient) LookupUserByAttr(ctx context.Context, attr, value string) (
 	}, nil
 }
 
-// UserGroupsACL fetches all groups the user is member of, and compiles ACLs from group attributes.
 func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL, error) {
 	if v, ok := l.cache.Get(user.DN); ok {
 		return v, nil
 	}
-	// Find groups where user is a member
 	memFilter := fmt.Sprintf("(%s=%s)", safeAttr(l.cfg.MemberAttr), ldap.EscapeFilter(user.DN))
 	search := ldap.NewSearchRequest(
 		l.cfg.GroupBaseDN,
@@ -129,9 +127,7 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 	}
 	var acls []GroupACL
 	for _, e := range res.Entries {
-		// Parse ACL attributes
 		if l.cfg.BindingsAttr != "" {
-			// compact form lines like "calendar-id=team;priv=read,edit,bind,unbind"
 			for _, line := range e.GetAttributeValues(l.cfg.BindingsAttr) {
 				acl := parseBindingLine(line)
 				if acl.CalendarID != "" {
@@ -147,7 +143,6 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 			}
 		}
 	}
-	// Cache short
 	l.cache.Set(user.DN, acls, time.Now().Add(l.cfg.CacheTTL))
 	return acls, nil
 }
@@ -195,7 +190,6 @@ func privilegesFromList(calID string, privs []string) GroupACL {
 }
 
 func parseBindingLine(s string) GroupACL {
-	// e.g., "calendar-id=team;priv=read,write,bind,unbind"
 	acl := GroupACL{}
 	parts := strings.Split(s, ";")
 	for _, p := range parts {
@@ -252,4 +246,28 @@ func safeAttr(a string) string {
 		}
 		return -1
 	}, a)
+}
+
+func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
+	u := cfg.URL
+	startTLS := false
+	if strings.HasPrefix(strings.ToLower(u), "ldap://") {
+		startTLS = true
+	}
+	tlsConfig := &tls.Config{}
+	host, _, err := net.SplitHostPort(strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://"))
+	if err == nil && host != "" {
+		tlsConfig.ServerName = host
+	}
+	conn, err := ldap.DialURL(u)
+	if err != nil {
+		return nil, err
+	}
+	if startTLS {
+		if err := conn.StartTLS(tlsConfig); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
 }
