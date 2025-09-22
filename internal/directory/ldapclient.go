@@ -148,7 +148,7 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 }
 
 func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("token="+ldap.EscapeFilter(token)))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("token="+token))
 	if err != nil {
 		return false, "", err
 	}
@@ -182,10 +182,10 @@ func privilegesFromList(calID string, privs []string) GroupACL {
 	return GroupACL{
 		CalendarID:   calID,
 		Read:         m["read"],
-		WriteProps:   m["edit"] || m["writeprops"] || m["write-properties"],
-		WriteContent: m["write"] || m["writecontent"] || m["write-content"],
-		Bind:         m["create"] || m["bind"],
-		Unbind:       m["delete"] || m["unbind"],
+		WriteProps:   m["writeprops"] || m["write-properties"],
+		WriteContent: m["writecontent"] || m["write-content"],
+		Bind:         m["bind"],
+		Unbind:       m["unbind"],
 	}
 }
 
@@ -207,13 +207,13 @@ func parseBindingLine(s string) GroupACL {
 				switch strings.ToLower(strings.TrimSpace(t)) {
 				case "read":
 					acl.Read = true
-				case "edit", "writeprops", "write-properties":
+				case "writeprops", "write-properties":
 					acl.WriteProps = true
-				case "write", "writecontent", "write-content":
+				case "writecontent", "write-content":
 					acl.WriteContent = true
-				case "bind", "create":
+				case "bind":
 					acl.Bind = true
-				case "unbind", "delete":
+				case "unbind":
 					acl.Unbind = true
 				}
 			}
@@ -241,7 +241,7 @@ func firstNonEmpty(a, b string) string {
 
 func safeAttr(a string) string {
 	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-' || r == '_' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '-' || r == '_' {
 			return r
 		}
 		return -1
@@ -249,46 +249,55 @@ func safeAttr(a string) string {
 }
 
 func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
-	u := cfg.URL
-	isLDAP := strings.HasPrefix(strings.ToLower(u), "ldap://")
-	isLDAPS := strings.HasPrefix(strings.ToLower(u), "ldaps://")
-
-	tlsConfig := &tls.Config{}
-	hostPort := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
-	if h, _, err := net.SplitHostPort(hostPort); err == nil && h != "" {
-		tlsConfig.ServerName = h
+	u := strings.TrimSpace(cfg.URL)
+	if u == "" {
+		return nil, errors.New("LDAP URL is empty")
 	}
 
-	if cfg.InsecureSkipVerify {
-		tlsConfig.InsecureSkipVerify = true
+	isLDAPS := strings.HasPrefix(strings.ToLower(u), "ldaps://")
+	isLDAP := strings.HasPrefix(strings.ToLower(u), "ldap://")
+
+	if !isLDAP && !isLDAPS {
+		return nil, errors.New("URL must start with ldap:// or ldaps://")
+	}
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+	}
+
+	hostPort := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
+	if host, _, err := net.SplitHostPort(hostPort); err == nil && host != "" {
+		tlsConfig.ServerName = host
+	} else if strings.Contains(hostPort, ":") == false {
+		if isLDAPS {
+			tlsConfig.ServerName = hostPort
+		} else {
+			tlsConfig.ServerName = hostPort
+		}
 	}
 
 	if isLDAPS {
 		conn, err := ldap.DialURL(u, ldap.DialWithTLSConfig(tlsConfig))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to connect to LDAPS server: %w", err)
 		}
 		return conn, nil
 	}
 
 	conn, err := ldap.DialURL(u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to LDAP server: %w", err)
 	}
 
-	if isLDAP {
-		if cfg.RequireTLS {
-			if err := conn.StartTLS(tlsConfig); err != nil {
-				conn.Close()
-				return nil, err
-			}
-			return conn, nil
-		}
-
+	if cfg.RequireTLS {
 		if err := conn.StartTLS(tlsConfig); err != nil {
-			return conn, nil
+			conn.Close()
+			return nil, fmt.Errorf("failed to start TLS: %w", err)
 		}
-		return conn, nil
+	} else {
+		if err := conn.StartTLS(tlsConfig); err == nil {
+		} else {
+		}
 	}
 
 	return conn, nil
