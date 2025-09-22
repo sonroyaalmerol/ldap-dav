@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,7 +60,7 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 		l.cfg.UserBaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
 		fmt.Sprintf(l.cfg.UserFilter, ldap.EscapeFilter(username), ldap.EscapeFilter(username)),
-		[]string{"dn", "uid", "cn", "displayName", "mail"},
+		userAttrList(l.cfg),
 		nil,
 	)
 	res, err := l.conn.SearchWithPaging(searchReq, 1)
@@ -79,7 +80,7 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 	}
 
 	u := &User{
-		UID:         firstNonEmpty(entry.GetAttributeValue("uid"), entry.GetAttributeValue("mail")),
+		UID:         firstNonEmpty(entry.GetAttributeValue(l.cfg.TokenUserAttr), entry.GetAttributeValue("mail")),
 		DN:          userDN,
 		DisplayName: firstNonEmpty(entry.GetAttributeValue("displayName"), entry.GetAttributeValue("cn")),
 		Mail:        entry.GetAttributeValue("mail"),
@@ -102,7 +103,7 @@ func (l *LDAPClient) LookupUserByAttr(ctx context.Context, attr, value string) (
 	}
 	e := res.Entries[0]
 	return &User{
-		UID:         firstNonEmpty(e.GetAttributeValue("uid"), e.GetAttributeValue("mail")),
+		UID:         firstNonEmpty(e.GetAttributeValue(l.cfg.TokenUserAttr), e.GetAttributeValue("mail")),
 		DN:          e.DN,
 		DisplayName: firstNonEmpty(e.GetAttributeValue("displayName"), e.GetAttributeValue("cn")),
 		Mail:        e.GetAttributeValue("mail"),
@@ -220,6 +221,14 @@ func parseBindingLine(s string) GroupACL {
 		}
 	}
 	return acl
+}
+
+func userAttrList(cfg config.LDAPConfig) []string {
+	attrs := []string{"dn", "displayName", "mail", "uid", "cn"}
+	if cfg.TokenUserAttr != "" && !slices.Contains(attrs, cfg.TokenUserAttr) {
+		attrs = append(attrs, cfg.TokenUserAttr)
+	}
+	return attrs
 }
 
 func attrList(cfg config.LDAPConfig) []string {
