@@ -607,6 +607,36 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		}
 	})
 
+	t.Run("BasicMkCol", func(t *testing.T) {
+		calendarName := "test-calendar-mkcol"
+		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		
+		body := `<?xml version="1.0" encoding="utf-8" ?>
+<D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:set>
+    <D:prop>
+      <D:resourcetype>
+        <D:collection/>
+        <C:calendar/>
+      </D:resourcetype>
+      <D:displayname>MKCOL Test Calendar</D:displayname>
+    </D:prop>
+  </D:set>
+</D:mkcol>`
+		
+		req, _ := http.NewRequest("MKCOL", url, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/xml")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("basic MKCOL: %v", err)
+		}
+		resp.Body.Close()
+		
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("basic MKCOL status: %d", resp.StatusCode)
+		}
+
 	// Test MKCALENDAR with properties
 	t.Run("MkCalendarWithProperties", func(t *testing.T) {
 		calendarName := "test-calendar-props"

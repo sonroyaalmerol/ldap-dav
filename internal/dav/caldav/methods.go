@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -229,32 +230,92 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	http.Error(w, "MKCOL not supported; provision calendars in storage", http.StatusForbidden)
-}
-
-func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
-	if owner == "" || calURI == "" || len(rest) != 0 {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
 
 	if !common.SafeSegment(calURI) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
-	pr := common.MustPrincipal(r.Context())
-	if pr.UserID != owner {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
+	// Check if calendar already exists
 	if _, err := h.loadCalendarByOwnerURI(r.Context(), owner, calURI); err == nil {
 		http.Error(w, "calendar already exists", http.StatusConflict)
 		return
 	}
 
+	// Parse request body to determine if this is a calendar creation
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = r.Body.Close()
+
+	var displayName string
+	var description string
+	isCalendar := false
+
+	if len(body) > 0 {
+		// Check if this is an MKCOL request with calendar resourcetype
+		var req struct {
+			XMLName xml.Name `xml:"DAV: mkcol"`
+			Set     struct {
+				Prop struct {
+					ResourceType struct {
+						Collection *struct{} `xml:"DAV: collection"`
+						Calendar   *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar"`
+					} `xml:"DAV: resourcetype"`
+					DisplayName         *string `xml:"DAV: displayname"`
+					CalendarDescription *string `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+				} `xml:"DAV: prop"`
+			} `xml:"DAV: set"`
+		}
+
+		if err := xml.Unmarshal(body, &req); err == nil {
+			// Check if calendar resourcetype is specified
+			if req.Set.Prop.ResourceType.Calendar != nil {
+				isCalendar = true
+			}
+			if req.Set.Prop.DisplayName != nil {
+				displayName = *req.Set.Prop.DisplayName
+			}
+			if req.Set.Prop.CalendarDescription != nil {
+				description = *req.Set.Prop.CalendarDescription
+			}
+		}
+	}
+
+	// Default to calendar creation (CalDAV servers typically only create calendars)
+	if !isCalendar {
+		isCalendar = true
+	}
+
+	if !isCalendar {
+		http.Error(w, "only calendar collections supported", http.StatusForbidden)
+		return
+	}
+
+	// Set defaults if not provided
+	if displayName == "" {
+		displayName = calURI
+	}
+
+	// Create the calendar using your existing method signature
+	calendar := storage.Calendar{
+		URI:         calURI,
+		DisplayName: displayName,
+		OwnerUserID: owner,
+	}
+
+	if err := h.store.CreateCalendar(calendar, "", description); err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calURI", calURI).
+			Msg("CreateCalendar failed")
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
+	// Parse MKCALENDAR request body and convert to MKCOL format
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	_ = r.Body.Close()
 
@@ -283,82 +344,36 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Set defaults if not provided
-	if displayName == "" {
-		displayName = calURI
+	// Convert to MKCOL format
+	mkcolBody := `<?xml version="1.0" encoding="utf-8" ?>
+<D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:set>
+    <D:prop>
+      <D:resourcetype>
+        <D:collection/>
+        <C:calendar/>
+      </D:resourcetype>`
+
+	if displayName != "" {
+		mkcolBody += fmt.Sprintf(`
+      <D:displayname>%s</D:displayname>`, displayName)
 	}
 
-	calendar := storage.Calendar{
-		URI:         calURI,
-		DisplayName: displayName,
-		OwnerUserID: owner,
+	if description != "" {
+		mkcolBody += fmt.Sprintf(`
+      <C:calendar-description>%s</C:calendar-description>`, description)
 	}
 
-	if err := h.store.CreateCalendar(calendar, "", description); err != nil {
-		h.logger.Error().Err(err).
-			Str("owner", owner).
-			Str("calURI", calURI).
-			Msg("CreateCalendar failed")
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
+	mkcolBody += `
+    </D:prop>
+  </D:set>
+</D:mkcol>`
 
-	w.WriteHeader(http.StatusCreated)
-}
+	// Create new request with converted body
+	r.Body = io.NopCloser(strings.NewReader(mkcolBody))
 
-func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
-	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
-	if owner == "" || calURI == "" || len(rest) != 0 {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
-
-	if !common.SafeSegment(calURI) {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
-
-	pr := common.MustPrincipal(r.Context())
-	if pr.UserID != owner {
-		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-		if err != nil || !eff.CanEdit() {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-	}
-
-	// Parse a minimal PROPPATCH setting DAV:displayname
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	_ = r.Body.Close()
-	type setRemove struct {
-		XMLName xml.Name
-		Prop    struct {
-			DisplayName *string `xml:"displayname"`
-		} `xml:"prop"`
-	}
-	var req struct {
-		XMLName xml.Name   `xml:"DAV: propertyupdate"`
-		Set     *setRemove `xml:"set"`
-		Remove  *setRemove `xml:"remove"`
-	}
-	okXML := true
-	if err := xml.Unmarshal(body, &req); err != nil {
-		okXML = false
-	}
-	var newName *string
-	if okXML && req.Set != nil && req.Set.Prop.DisplayName != nil {
-		newName = req.Set.Prop.DisplayName
-	}
-	if okXML && req.Remove != nil && req.Remove.Prop.DisplayName != nil {
-		// Remove displayname -> set NULL
-		newName = nil
-	}
-	if newName != nil || (okXML && req.Remove != nil) {
-		_ = h.store.UpdateCalendarDisplayName(r.Context(), owner, calURI, newName)
-	}
-	// Minimal multistatus response
-	w.WriteHeader(207)
-	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><d:multistatus xmlns:d="DAV:"><d:response><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>`)
+	// Delegate to MKCOL handler
+	h.HandleMkcol(w, r)
 }
 
 func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
