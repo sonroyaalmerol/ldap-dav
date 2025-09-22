@@ -42,6 +42,11 @@ func (r *Router) setupRoutes() http.Handler {
 	base := r.getBasePath()
 	mux.HandleFunc(base, r.handleDAVRequest)
 
+	if strings.HasSuffix(base, "/") {
+		baseWithoutSlash := strings.TrimSuffix(base, "/")
+		mux.HandleFunc(baseWithoutSlash, r.handleDAVRequest)
+	}
+
 	return mux
 }
 
