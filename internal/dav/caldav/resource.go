@@ -33,6 +33,9 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	home := calendarHome(c.basePath, owner)
+	if !strings.HasSuffix(home, "/") {
+		home += "/"
+	}
 
 	// Only allow user to view own home listing
 	if u.UID != owner {
@@ -81,6 +84,9 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 
 		// Shared calendars container
 		sharedBase := sharedRoot(c.basePath, owner)
+		if !strings.HasSuffix(sharedBase, "/") {
+			sharedBase += "/"
+		}
 		resps = append(resps, common.Response{
 			Href: sharedBase,
 			Props: []common.PropStat{{Prop: common.Prop{
@@ -175,10 +181,19 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		href = common.JoinURL(sharedRoot(c.basePath, requesterUID), collection) + "/"
 		// Owner should be the canonical principal of the true owner
 		ownerHref = common.PrincipalURL(c.basePath, trueOwner)
+		if !strings.HasSuffix(ownerHref, "/") {
+			ownerHref += "/"
+		}
 	} else {
 		// Owned calendar
 		href = calendarPath(c.basePath, owner, collection)
+		if !strings.HasSuffix(href, "/") {
+			href += "/"
+		}
 		ownerHref = common.PrincipalURL(c.basePath, owner)
+		if !strings.HasSuffix(ownerHref, "/") {
+			ownerHref += "/"
+		}
 	}
 
 	prop := common.Prop{

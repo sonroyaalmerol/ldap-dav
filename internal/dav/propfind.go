@@ -75,6 +75,10 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, dep
 	}
 
 	self := common.PrincipalURL(h.basePath, u.UID)
+	if !strings.HasSuffix(self, "/") {
+		self += "/"
+	}
+
 	prop := common.Prop{
 		ResourceType:         common.MakePrincipalResourcetype(),
 		DisplayName:          &u.DisplayName,
@@ -120,9 +124,9 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request) {
 				Props: []common.PropStat{{
 					Prop: common.Prop{
 						ResourceType:           common.MakeCollectionResourcetype(),
-						CurrentUserPrincipal:   &common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
-						PrincipalURL:           &common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
-						PrincipalCollectionSet: &common.Hrefs{Values: []string{common.JoinURL(h.basePath, "principals") + "/"}},
+						CurrentUserPrincipal:   &common.Href{Value: ensureSlash(common.CurrentUserPrincipalHref(r.Context(), h.basePath))},
+						PrincipalURL:           &common.Href{Value: ensureSlash(common.CurrentUserPrincipalHref(r.Context(), h.basePath))},
+						PrincipalCollectionSet: &common.Hrefs{Values: []string{ensureSlash(common.JoinURL(h.basePath, "principals"))}},
 					},
 					Status: common.Ok(),
 				}},
@@ -134,4 +138,11 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) RegisterResourceHandler(key string, handler ResourceHandler) {
 	h.resourceHandlers[key] = handler
+}
+
+func ensureSlash(s string) string {
+	if strings.HasSuffix(s, "/") {
+		return s
+	}
+	return s + "/"
 }
