@@ -599,18 +599,12 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			b, _ := io.ReadAll(resp.Body)
 			t.Fatalf("verify basic calendar status: %d, body: %s", resp.StatusCode, string(b))
 		}
-
-		// Check that response contains calendar resourcetype
-		respBody, _ := io.ReadAll(resp.Body)
-		if !bytes.Contains(respBody, []byte("calendar")) {
-			t.Fatalf("created resource is not a calendar: %s", string(respBody))
-		}
 	})
 
 	t.Run("BasicMkCol", func(t *testing.T) {
 		calendarName := "test-calendar-mkcol"
 		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
-		
+
 		body := `<?xml version="1.0" encoding="utf-8" ?>
 <D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:set>
@@ -623,7 +617,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
     </D:prop>
   </D:set>
 </D:mkcol>`
-		
+
 		req, _ := http.NewRequest("MKCOL", url, bytes.NewBufferString(body))
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Content-Type", "application/xml")
@@ -632,10 +626,17 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 			t.Fatalf("basic MKCOL: %v", err)
 		}
 		resp.Body.Close()
-		
+
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("basic MKCOL status: %d", resp.StatusCode)
 		}
+
+		// Check that response contains calendar resourcetype
+		respBody, _ := io.ReadAll(resp.Body)
+		if !bytes.Contains(respBody, []byte("calendar")) {
+			t.Fatalf("created resource is not a calendar: %s", string(respBody))
+		}
+	})
 
 	// Test MKCALENDAR with properties
 	t.Run("MkCalendarWithProperties", func(t *testing.T) {
