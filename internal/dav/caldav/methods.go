@@ -277,7 +277,7 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
-		http.Error(w, "bad path", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("bad path split (owner: %s, calURI: %s, rest: %v)", owner, calURI, rest), http.StatusBadRequest)
 		return
 	}
 	pr := common.MustPrincipal(r.Context())
@@ -287,7 +287,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !common.SafeSegment(calURI) || !common.SafeCollectionName(calURI) {
-		http.Error(w, "bad path", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("bad path segment (calURI: %s)", calURI), http.StatusBadRequest)
 		return
 	}
 
