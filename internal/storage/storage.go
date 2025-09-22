@@ -38,6 +38,7 @@ type Change struct {
 type Store interface {
 	Close()
 	// Calendars
+	CreateCalendar(c Calendar, ownerGroup string, description string) error
 	GetCalendarByID(ctx context.Context, id string) (*Calendar, error)
 	UpdateCalendarDisplayName(ctx context.Context, ownerUID, calURI string, displayName *string) error
 	ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*Calendar, error)

@@ -15,6 +15,7 @@ type DAVService interface {
 	HandlePut(w http.ResponseWriter, r *http.Request)
 	HandleDelete(w http.ResponseWriter, r *http.Request)
 	HandleMkcol(w http.ResponseWriter, r *http.Request)
+	HandleMkcalendar(w http.ResponseWriter, r *http.Request)
 	HandleProppatch(w http.ResponseWriter, r *http.Request)
 	HandleReport(w http.ResponseWriter, r *http.Request)
 	HandleACL(w http.ResponseWriter, r *http.Request)

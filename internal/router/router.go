@@ -130,6 +130,8 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 		service.HandleDelete(w, req)
 	case "MKCOL":
 		service.HandleMkcol(w, req)
+	case "MKCALENDAR":
+		service.HandleMkcalendar(w, req)
 	case "PROPPATCH":
 		service.HandleProppatch(w, req)
 	case "ACL":

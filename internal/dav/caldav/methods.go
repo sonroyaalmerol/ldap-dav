@@ -232,6 +232,80 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "MKCOL not supported; provision calendars in storage", http.StatusForbidden)
 }
 
+func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
+	if owner == "" || calURI == "" || len(rest) != 0 {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+
+	if !common.SafeSegment(calURI) {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+
+	pr := common.MustPrincipal(r.Context())
+	if pr.UserID != owner {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	if _, err := h.loadCalendarByOwnerURI(r.Context(), owner, calURI); err == nil {
+		http.Error(w, "calendar already exists", http.StatusConflict)
+		return
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = r.Body.Close()
+
+	var displayName string
+	var description string
+
+	if len(body) > 0 {
+		// Parse MKCALENDAR XML body
+		var req struct {
+			XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav mkcalendar"`
+			Set     struct {
+				Prop struct {
+					DisplayName         *string `xml:"DAV: displayname"`
+					CalendarDescription *string `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+				} `xml:"DAV: prop"`
+			} `xml:"DAV: set"`
+		}
+
+		if err := xml.Unmarshal(body, &req); err == nil {
+			if req.Set.Prop.DisplayName != nil {
+				displayName = *req.Set.Prop.DisplayName
+			}
+			if req.Set.Prop.CalendarDescription != nil {
+				description = *req.Set.Prop.CalendarDescription
+			}
+		}
+	}
+
+	// Set defaults if not provided
+	if displayName == "" {
+		displayName = calURI
+	}
+
+	calendar := storage.Calendar{
+		URI:         calURI,
+		DisplayName: displayName,
+		OwnerUserID: owner,
+	}
+
+	if err := h.store.CreateCalendar(calendar, "", description); err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calURI", calURI).
+			Msg("CreateCalendar failed")
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
@@ -324,4 +398,3 @@ func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleACL(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "ACLs managed via LDAP groups", http.StatusForbidden)
 }
-
