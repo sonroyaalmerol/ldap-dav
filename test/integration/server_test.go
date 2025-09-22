@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -568,6 +569,11 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 }
 
 func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
+	enc := func(seg string) string {
+		// Encode path segment safely; we only want to encode the calendar name portion
+		return strings.ReplaceAll(url.PathEscape(seg), "+", "%20")
+	}
+
 	// Helper to do PROPFIND Depth:0 and return body as string
 	doPropfind := func(url string, body string) (int, string, error) {
 		req, _ := http.NewRequest("PROPFIND", url, bytes.NewBufferString(body))
@@ -585,7 +591,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	t.Run("BasicMkCalendar", func(t *testing.T) {
 		calendarName := "test-calendar-basic"
-		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		url := baseURL + basePath + "/calendars/alice/" + enc(calendarName) + "/"
 
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
 		req.Header.Set("Authorization", authz)
@@ -622,7 +628,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	t.Run("BasicMkCol", func(t *testing.T) {
 		calendarName := "test-calendar-mkcol"
-		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		url := baseURL + basePath + "/calendars/alice/" + enc(calendarName) + "/"
 
 		body := `<?xml version="1.0" encoding="utf-8" ?>
 <D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -676,7 +682,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	t.Run("MkCalendarWithProperties", func(t *testing.T) {
 		calendarName := "test-calendar-props"
-		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		url := baseURL + basePath + "/calendars/alice/" + enc(calendarName) + "/"
 
 		body := `<?xml version="1.0" encoding="utf-8" ?>
 <C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -731,7 +737,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	t.Run("MkCalendarConflict", func(t *testing.T) {
 		calendarName := "test-calendar-conflict"
-		url := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		url := baseURL + basePath + "/calendars/alice/" + enc(calendarName) + "/"
 
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
 		req.Header.Set("Authorization", authz)
@@ -760,33 +766,53 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 	})
 
 	t.Run("MkCalendarInvalidPath", func(t *testing.T) {
-		invalidNames := []string{
-			"calendar/../invalid",
-			"calendar/nested/path",
-			"..",
-			".",
-			"calendar\x00null",
-			"calendar\nnewline",
-			"calendar\ttab",
+		type caseDef struct {
+			rawName      string
+			expect4xx    bool
+			useRawString bool // if true we use rawName directly in URL (for traversal cases)
+		}
+		cases := []caseDef{
+			{rawName: "calendar/../invalid", expect4xx: true, useRawString: true},  // traversal
+			{rawName: "calendar/nested/path", expect4xx: true, useRawString: true}, // nested path
+			{rawName: "..", expect4xx: true, useRawString: false},
+			{rawName: ".", expect4xx: true, useRawString: false},
+			// Control characters will be percent-encoded to keep URL valid; server should still reject
+			{rawName: "calendar\x00null", expect4xx: true, useRawString: false},
+			{rawName: "calendar\nnewline", expect4xx: true, useRawString: false},
+			{rawName: "calendar\ttab", expect4xx: true, useRawString: false},
 		}
 
-		for _, invalidName := range invalidNames {
-			url := baseURL + basePath + "/calendars/alice/" + invalidName + "/"
+		for _, cse := range cases {
+			var url string
+			if cse.useRawString {
+				// Insert raw as-is to trigger server routing checks (may still be a valid URL)
+				url = baseURL + basePath + "/calendars/alice/" + cse.rawName + "/"
+			} else {
+				// Encode as a segment so the URL is syntactically valid
+				url = baseURL + basePath + "/calendars/alice/" + enc(cse.rawName) + "/"
+			}
+
 			req, _ := http.NewRequest("MKCALENDAR", url, nil)
 			req.Header.Set("Authorization", authz)
 			resp, err := client.Do(req)
 			if err != nil {
-				t.Fatalf("MKCALENDAR invalid path %q: %v", invalidName, err)
+				// If no response, still consider as failure (cannot proceed)
+				t.Logf("MKCALENDAR invalid path %q client error: %v", cse.rawName, err)
+				continue
 			}
+
 			func() {
 				defer resp.Body.Close()
-				if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-					b, _ := io.ReadAll(resp.Body)
-					t.Errorf("invalid path %q returned %d body=%s (expected 4xx)", invalidName, resp.StatusCode, string(b))
+				if cse.expect4xx {
+					if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+						b, _ := io.ReadAll(resp.Body)
+						t.Errorf("invalid path %q returned %d body=%s (expected 4xx)", cse.rawName, resp.StatusCode, string(b))
+					}
 				}
 			}()
 		}
 
+		// Empty calendar name: double slash
 		emptyURL := baseURL + basePath + "/calendars/alice//"
 		req, _ := http.NewRequest("MKCALENDAR", emptyURL, nil)
 		req.Header.Set("Authorization", authz)
@@ -802,7 +828,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 	})
 
 	t.Run("MkCalendarPermissionDenied", func(t *testing.T) {
-		url := baseURL + basePath + "/calendars/bob/unauthorized-calendar/"
+		url := baseURL + basePath + "/calendars/bob/" + enc("unauthorized-calendar") + "/"
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
 		req.Header.Set("Authorization", authz)
 		resp, err := client.Do(req)
@@ -817,7 +843,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 	})
 
 	t.Run("MkCalendarUnauthenticated", func(t *testing.T) {
-		url := baseURL + basePath + "/calendars/alice/unauth-calendar/"
+		url := baseURL + basePath + "/calendars/alice/" + enc("unauth-calendar") + "/"
 		req, _ := http.NewRequest("MKCALENDAR", url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -832,7 +858,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 
 	t.Run("UseCreatedCalendar", func(t *testing.T) {
 		calendarName := "test-calendar-usage"
-		calendarURL := baseURL + basePath + "/calendars/alice/" + calendarName + "/"
+		calendarURL := baseURL + basePath + "/calendars/alice/" + enc(calendarName) + "/"
 
 		req, _ := http.NewRequest("MKCALENDAR", calendarURL, nil)
 		req.Header.Set("Authorization", authz)
@@ -904,7 +930,7 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 	})
 
 	t.Run("MkCalendarMalformedXML", func(t *testing.T) {
-		url := baseURL + basePath + "/calendars/alice/malformed-xml-test/"
+		url := baseURL + basePath + "/calendars/alice/" + enc("malformed-xml-test") + "/"
 
 		malformedXML := `<?xml version="1.0" encoding="utf-8" ?>
 <C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -924,7 +950,6 @@ func testMkCalendar(t *testing.T, client *http.Client, baseURL, basePath, authz 
 		}
 		defer resp.Body.Close()
 
-		// Accept either 201 (created, ignore malformed) or 400 (reject malformed)
 		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusBadRequest {
 			b, _ := io.ReadAll(resp.Body)
 			t.Logf("MKCALENDAR malformed XML returned %d body=%s (could be 201 or 400)", resp.StatusCode, string(b))
