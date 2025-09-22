@@ -67,6 +67,19 @@ func SafeSegment(s string) bool {
 	return s != "" && !strings.Contains(s, "/") && !strings.Contains(s, "\\") && !strings.Contains(s, "..")
 }
 
+func SafeCollectionName(s string) bool {
+	for _, r := range s {
+		// ASCII control chars (0x00-0x1F) and DEL (0x7F) are not allowed
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	if strings.ContainsAny(s, "/") {
+		return false
+	}
+	return true
+}
+
 func StrPtr(s string) *string { return &s }
 func IntPtr(i int) *int       { return &i }
 

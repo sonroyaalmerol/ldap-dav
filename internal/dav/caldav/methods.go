@@ -286,7 +286,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !common.SafeSegment(calURI) {
+	if !common.SafeSegment(calURI) || !common.SafeCollectionName(calURI) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -362,7 +362,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 			Str("owner", owner).
 			Str("calURI", calURI).
 			Msg("CreateCalendar failed")
-		http.Error(w, "storage error", http.StatusInternalServerError)
+		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
