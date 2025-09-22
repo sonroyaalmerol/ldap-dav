@@ -219,6 +219,61 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
+	if owner == "" || calURI == "" || len(rest) != 0 {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+
+	if !common.SafeSegment(calURI) {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+
+	pr := common.MustPrincipal(r.Context())
+	if pr.UserID != owner {
+		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
+		if err != nil || !eff.CanEdit() {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Parse a minimal PROPPATCH setting DAV:displayname
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = r.Body.Close()
+	type setRemove struct {
+		XMLName xml.Name
+		Prop    struct {
+			DisplayName *string `xml:"displayname"`
+		} `xml:"prop"`
+	}
+	var req struct {
+		XMLName xml.Name   `xml:"DAV: propertyupdate"`
+		Set     *setRemove `xml:"set"`
+		Remove  *setRemove `xml:"remove"`
+	}
+	okXML := true
+	if err := xml.Unmarshal(body, &req); err != nil {
+		okXML = false
+	}
+	var newName *string
+	if okXML && req.Set != nil && req.Set.Prop.DisplayName != nil {
+		newName = req.Set.Prop.DisplayName
+	}
+	if okXML && req.Remove != nil && req.Remove.Prop.DisplayName != nil {
+		// Remove displayname -> set NULL
+		newName = nil
+	}
+	if newName != nil || (okXML && req.Remove != nil) {
+		_ = h.store.UpdateCalendarDisplayName(r.Context(), owner, calURI, newName)
+	}
+	// Minimal multistatus response
+	w.WriteHeader(207)
+	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><d:multistatus xmlns:d="DAV:"><d:response><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>`)
+}
+
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
