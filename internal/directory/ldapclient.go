@@ -250,20 +250,25 @@ func safeAttr(a string) string {
 
 func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
 	u := cfg.URL
-	useStartTLS := false
-	if strings.HasPrefix(strings.ToLower(u), "ldap://") {
-		useStartTLS = true
-	}
+	isLDAP := strings.HasPrefix(strings.ToLower(u), "ldap://")
+	isLDAPS := strings.HasPrefix(strings.ToLower(u), "ldaps://")
 
 	tlsConfig := &tls.Config{}
-
 	hostPort := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
-	host, _, err := net.SplitHostPort(hostPort)
-	if err == nil && host != "" {
-		tlsConfig.ServerName = host
+	if h, _, err := net.SplitHostPort(hostPort); err == nil && h != "" {
+		tlsConfig.ServerName = h
 	}
-	if cfg.InsecureSkipVerify { // allow plain or self-signed in tests/dev if cfg supports it
+
+	if cfg.InsecureSkipVerify {
 		tlsConfig.InsecureSkipVerify = true
+	}
+
+	if isLDAPS {
+		conn, err := ldap.DialURL(u, ldap.DialWithTLSConfig(tlsConfig))
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
 	}
 
 	conn, err := ldap.DialURL(u)
@@ -271,16 +276,17 @@ func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
 		return nil, err
 	}
 
-	if useStartTLS {
-		if !cfg.RequireTLS {
+	if isLDAP {
+		if cfg.RequireTLS {
 			if err := conn.StartTLS(tlsConfig); err != nil {
-				return conn, nil
+				conn.Close()
+				return nil, err
 			}
 			return conn, nil
 		}
+
 		if err := conn.StartTLS(tlsConfig); err != nil {
-			conn.Close()
-			return nil, err
+			return conn, nil
 		}
 		return conn, nil
 	}
