@@ -29,6 +29,8 @@ type LDAPConfig struct {
 	MaxGroupDepth      int
 	Timeout            time.Duration
 	CacheTTL           time.Duration
+	InsecureSkipVerify bool
+	RequireTLS         bool
 }
 
 type AuthConfig struct {
@@ -95,6 +97,8 @@ func Load() (*Config, error) {
 			BindingsAttr:       getenv("LDAP_BINDINGS_ATTR", "caldavBindings"),
 			TokenUserAttr:      getenv("LDAP_TOKEN_USER_ATTR", "uid"),
 			EnableNestedGroups: getenv("LDAP_NESTED", "false") == "true",
+			InsecureSkipVerify: getenv("LDAP_SKIP_VERIFY", "false") == "true",
+			RequireTLS:         getenv("LDAP_REQUIRE_TLS", "false") == "true",
 			MaxGroupDepth:      3,
 			Timeout:            5 * time.Second,
 			CacheTTL:           60 * time.Second,

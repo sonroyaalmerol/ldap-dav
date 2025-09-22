@@ -250,24 +250,40 @@ func safeAttr(a string) string {
 
 func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
 	u := cfg.URL
-	startTLS := false
+	useStartTLS := false
 	if strings.HasPrefix(strings.ToLower(u), "ldap://") {
-		startTLS = true
+		useStartTLS = true
 	}
+
 	tlsConfig := &tls.Config{}
-	host, _, err := net.SplitHostPort(strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://"))
+
+	hostPort := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
+	host, _, err := net.SplitHostPort(hostPort)
 	if err == nil && host != "" {
 		tlsConfig.ServerName = host
 	}
+	if cfg.InsecureSkipVerify { // allow plain or self-signed in tests/dev if cfg supports it
+		tlsConfig.InsecureSkipVerify = true
+	}
+
 	conn, err := ldap.DialURL(u)
 	if err != nil {
 		return nil, err
 	}
-	if startTLS {
+
+	if useStartTLS {
+		if !cfg.RequireTLS {
+			if err := conn.StartTLS(tlsConfig); err != nil {
+				return conn, nil
+			}
+			return conn, nil
+		}
 		if err := conn.StartTLS(tlsConfig); err != nil {
 			conn.Close()
 			return nil, err
 		}
+		return conn, nil
 	}
+
 	return conn, nil
 }
