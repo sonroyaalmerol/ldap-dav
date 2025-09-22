@@ -7,12 +7,9 @@ import (
 	"net/http"
 )
 
-const (
-	NSDAV    = "DAV:"
-	NSCalDAV = "urn:ietf:params:xml:ns:caldav"
-)
-
 func WriteMultiStatus(w http.ResponseWriter, ms MultiStatus) {
+	ms.XmlnsD = NSDAV
+
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 	enc := xml.NewEncoder(&buf)
@@ -51,4 +48,3 @@ func CalContentType() *string {
 	ct := "text/calendar; charset=utf-8"
 	return &ct
 }
-

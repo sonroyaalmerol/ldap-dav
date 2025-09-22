@@ -62,7 +62,7 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 		}
 	}
 
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
@@ -102,7 +102,7 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Object) common.Response {
@@ -207,7 +207,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {

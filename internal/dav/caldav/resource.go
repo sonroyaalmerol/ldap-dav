@@ -119,7 +119,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *http.Request, owner, collection, depth string) {
@@ -164,7 +164,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 				DisplayName:  common.StrPtr("Shared"),
 			}, Status: common.Ok()}},
 		}}
-		common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+		WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 		return
 	}
 
@@ -231,7 +231,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		Props: []common.PropStat{{Prop: prop, Status: common.Ok()}},
 	}}
 
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Request, owner, collection, object string) {
@@ -266,7 +266,7 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 			}(),
 		}, Status: common.Ok()}},
 	}}
-	common.WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
 }
 
 func (c *CalDAVResourceHandler) GetHomeSetProperty(basePath, uid string) interface{} {
