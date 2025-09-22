@@ -182,10 +182,10 @@ func privilegesFromList(calID string, privs []string) GroupACL {
 	return GroupACL{
 		CalendarID:   calID,
 		Read:         m["read"],
-		WriteProps:   m["writeprops"] || m["write-properties"],
-		WriteContent: m["writecontent"] || m["write-content"],
-		Bind:         m["bind"],
-		Unbind:       m["unbind"],
+		WriteProps:   m["edit"] || m["writeprops"] || m["write-properties"],
+		WriteContent: m["write"] || m["writecontent"] || m["write-content"],
+		Bind:         m["create"] || m["bind"],
+		Unbind:       m["delete"] || m["unbind"],
 	}
 }
 
@@ -207,13 +207,13 @@ func parseBindingLine(s string) GroupACL {
 				switch strings.ToLower(strings.TrimSpace(t)) {
 				case "read":
 					acl.Read = true
-				case "writeprops", "write-properties":
+				case "edit", "writeprops", "write-properties":
 					acl.WriteProps = true
-				case "writecontent", "write-content":
+				case "write", "writecontent", "write-content":
 					acl.WriteContent = true
-				case "bind":
+				case "bind", "create":
 					acl.Bind = true
-				case "unbind":
+				case "unbind", "delete":
 					acl.Unbind = true
 				}
 			}
@@ -261,42 +261,37 @@ func dialLDAPAuto(cfg config.LDAPConfig) (*ldap.Conn, error) {
 		return nil, errors.New("URL must start with ldap:// or ldaps://")
 	}
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
-	}
-
-	hostPort := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
-	if host, _, err := net.SplitHostPort(hostPort); err == nil && host != "" {
-		tlsConfig.ServerName = host
-	} else if strings.Contains(hostPort, ":") == false {
-		if isLDAPS {
-			tlsConfig.ServerName = hostPort
+	if isLDAPS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		}
+		hostPort := strings.TrimPrefix(u, "ldaps://")
+		if host, _, err := net.SplitHostPort(hostPort); err == nil && host != "" {
+			tlsConfig.ServerName = host
 		} else {
 			tlsConfig.ServerName = hostPort
 		}
-	}
-
-	if isLDAPS {
-		conn, err := ldap.DialURL(u, ldap.DialWithTLSConfig(tlsConfig))
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to LDAPS server: %w", err)
-		}
-		return conn, nil
+		return ldap.DialURL(u, ldap.DialWithTLSConfig(tlsConfig))
 	}
 
 	conn, err := ldap.DialURL(u)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to LDAP server: %w", err)
+		return nil, err
 	}
 
 	if cfg.RequireTLS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		}
+		hostPort := strings.TrimPrefix(u, "ldap://")
+		if host, _, err := net.SplitHostPort(hostPort); err == nil && host != "" {
+			tlsConfig.ServerName = host
+		} else {
+			tlsConfig.ServerName = hostPort
+		}
 		if err := conn.StartTLS(tlsConfig); err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("failed to start TLS: %w", err)
-		}
-	} else {
-		if err := conn.StartTLS(tlsConfig); err == nil {
-		} else {
+			return nil, fmt.Errorf("StartTLS failed: %w", err)
 		}
 	}
 
