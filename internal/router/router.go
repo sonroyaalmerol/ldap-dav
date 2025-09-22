@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
@@ -13,7 +14,7 @@ import (
 
 var _ DAVService = (*caldav.Handlers)(nil)
 
-func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger interface{}) http.Handler {
+func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger zerolog.Logger) http.Handler {
 	r := &Router{
 		config:   cfg,
 		handlers: h,
@@ -47,7 +48,7 @@ func (r *Router) setupRoutes() http.Handler {
 		mux.HandleFunc(baseWithoutSlash, r.handleDAVRequest)
 	}
 
-	return mux
+	return loggingMiddleware(r.logger, mux)
 }
 
 func (r *Router) setupWellKnownRoutes(mux *http.ServeMux) {
@@ -87,6 +88,9 @@ func (r *Router) handleDAVRequest(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	r.logAttempt(req, p.UserID, true, nil)
+
 	req = req.WithContext(auth.WithPrincipal(req.Context(), p))
 
 	r.routeDAVMethod(w, req)
@@ -179,4 +183,22 @@ func (r *Router) authenticate(req *http.Request) (*auth.Principal, error) {
 	}
 
 	return nil, errors.New("no auth")
+}
+
+func (r *Router) logAttempt(req *http.Request, username string, ok bool, authErr error) {
+	ip := realIP(req)
+	ua := req.Header.Get("User-Agent")
+	authz := req.Header.Get("Authorization")
+	authType := ""
+	if i := strings.IndexByte(authz, ' '); i > 0 {
+		authType = strings.ToLower(authz[:i])
+	}
+	errMsg := ""
+	if authErr != nil {
+		errMsg = authErr.Error()
+	}
+	r.logger.Printf(
+		`auth attempt ok=%t user=%q method=%q path=%q ip=%q ua=%q auth=%q err=%q`,
+		ok, username, req.Method, req.URL.Path, ip, ua, authType, errMsg,
+	)
 }

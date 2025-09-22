@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 
+	"github.com/rs/zerolog"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
@@ -25,7 +26,7 @@ type Router struct {
 	config   *config.Config
 	handlers *dav.Handlers
 	auth     *auth.Chain
-	logger   interface{}
+	logger   zerolog.Logger
 
 	services map[string]DAVService
 }
