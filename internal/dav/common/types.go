@@ -90,10 +90,11 @@ type Href struct {
 }
 
 type MultiStatus struct {
-	XMLName             xml.Name   `xml:"DAV: multistatus"`
-	Responses           []Response `xml:"response"`
-	ResponseDescription string     `xml:"responsedescription,omitempty"`
-	SyncToken           string     `xml:"sync-token,omitempty"`
+	XMLName                     xml.Name   `xml:"DAV: multistatus"`
+	Responses                   []Response `xml:"response"`
+	ResponseDescription         string     `xml:"responsedescription,omitempty"`
+	SyncToken                   string     `xml:"sync-token,omitempty"`
+	NumberOfMatchesWithinLimits string     `xml:"number-of-matches-within-limits,omitempty"`
 }
 
 func NewMultiStatus(resps ...Response) *MultiStatus {
@@ -259,10 +260,12 @@ type CalendarMultiget struct {
 }
 
 type SyncCollection struct {
-	XMLName   xml.Name   `xml:"DAV: sync-collection"`
-	XmlnsD    string     `xml:"xmlns:D,attr,omitempty"`
-	SyncToken string     `xml:"DAV: sync-token"`
-	Limit     *SyncLimit `xml:"DAV: limit,omitempty"`
+	XMLName   xml.Name      `xml:"DAV: sync-collection"`
+	XmlnsD    string        `xml:"xmlns:D,attr,omitempty"`
+	SyncToken string        `xml:"DAV: sync-token"`
+	Limit     *SyncLimit    `xml:"DAV: limit,omitempty"`
+	SyncLevel string        `xml:"DAV: sync-level,omitempty"`
+	Prop      PropContainer `xml:"DAV: prop,omitempty"`
 }
 
 type SyncLimit struct {

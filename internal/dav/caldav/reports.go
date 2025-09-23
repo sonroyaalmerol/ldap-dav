@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -140,7 +141,6 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Parse requested properties for per-member responses
 	props := common.ParsePropRequest(sc.Prop)
 
 	curToken, _, err := h.store.GetSyncInfo(r.Context(), calendarID)
@@ -165,28 +165,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	colHref := common.CalendarPath(h.basePath, owner, calURI)
-
-	header := common.Response{
-		Hrefs: []common.Href{{Value: colHref}},
-	}
-	_ = header.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
-	_ = header.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
-	_ = header.EncodeProp(http.StatusOK, struct {
-		XMLName xml.Name `xml:"DAV: sync-token"`
-		Text    string   `xml:",chardata"`
-	}{Text: curToken})
-
 	var resps []common.Response
-	resps = append(resps, header)
-
-	if limit > 0 && len(changes) == limit {
-		n := len(changes)
-		_ = header.EncodeProp(http.StatusOK, struct {
-			XMLName xml.Name `xml:"DAV: number-of-matches-within-limits"`
-			N       int      `xml:",chardata"`
-		}{N: n})
-	}
 
 	for _, ch := range changes {
 		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, ch.UID+".ics")
@@ -197,15 +176,43 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 			resp.Status = &common.Status{Code: http.StatusNotFound}
 			resps = append(resps, resp)
 		} else {
-			resp := common.Response{
-				Hrefs: []common.Href{{Value: hrefStr}},
+			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+			// Return only requested properties. For sync, clients typically request getetag.
+			// Fetch object if any property requires it.
+			var obj *storage.Object
+			var getErr error
+			needObject := props.CalendarData || props.GetETag
+			if needObject {
+				obj, getErr = h.store.GetObject(r.Context(), calendarID, ch.UID)
+				if getErr != nil {
+					// Object disappeared between change listing and fetch; treat like deleted.
+					resp.Status = &common.Status{Code: http.StatusNotFound}
+					resps = append(resps, resp)
+					continue
+				}
 			}
-			_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
+			if props.GetETag && obj != nil && obj.ETag != "" {
+				_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(obj.ETag)})
+			}
+			if props.CalendarData && obj != nil {
+				type CalendarData struct {
+					XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+					Text    string   `xml:",chardata"`
+				}
+				_ = resp.EncodeProp(http.StatusOK, CalendarData{Text: obj.Data})
+			}
 			resps = append(resps, resp)
 		}
 	}
 
-	ms := common.MultiStatus{Responses: resps}
+	// RFC 6578: top-level sync-token and number-of-matches-within-limits
+	ms := common.MultiStatus{
+		Responses: resps,
+		SyncToken: curToken,
+	}
+	if limit > 0 && len(changes) == limit {
+		ms.NumberOfMatchesWithinLimits = fmt.Sprintf("%d", len(changes))
+	}
 	_ = common.ServeMultiStatus(w, &ms)
 }
 
