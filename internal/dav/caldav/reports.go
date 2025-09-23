@@ -237,7 +237,7 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
+	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, nil, nil)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return

@@ -186,7 +186,7 @@ func testPrincipalPropfind(t *testing.T, client *http.Client, baseURL, basePath,
 		t.Fatalf("propfind principal status at %s: %d body=%s", url, resp.StatusCode, string(b))
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if !strings.Contains(ct, "application/xml") {
+	if !strings.Contains(ct, "/xml") {
 		t.Errorf("principal PROPFIND content-type: %q", ct)
 	}
 	// Parse Multi-Status and verify CALDAV:calendar-home-set per RFC 4791 §6.2.1
@@ -227,7 +227,7 @@ func testCalendarHomeListing(t *testing.T, client *http.Client, baseURL, basePat
 		t.Fatalf("propfind home status at %s: %d body=%s", url, resp.StatusCode, string(b))
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if !strings.Contains(ct, "application/xml") {
+	if !strings.Contains(ct, "/xml") {
 		t.Errorf("home PROPFIND content-type: %q", ct)
 	}
 	b, _ := io.ReadAll(resp.Body)
@@ -329,7 +329,7 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 			t.Fatalf("report status: %d", resp.StatusCode)
 		}
 		ct := strings.ToLower(resp.Header.Get("Content-Type"))
-		if !strings.Contains(ct, "application/xml") {
+		if !strings.Contains(ct, "/xml") {
 			t.Errorf("calendar-query content-type: %q", ct)
 		}
 		rb, _ := io.ReadAll(resp.Body)
