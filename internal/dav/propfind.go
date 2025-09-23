@@ -87,6 +87,7 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ s
 	})
 	_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: u.DisplayName})
 	_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: common.Href{Value: self}})
+	_ = resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}})
 	_ = resp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: principal-URL"`
 		Href    common.Href

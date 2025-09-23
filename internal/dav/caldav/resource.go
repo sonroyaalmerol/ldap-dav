@@ -32,7 +32,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	home := calendarHome(c.basePath, owner)
+	home := common.CalendarHome(c.basePath, owner)
 
 	if u.UID != owner {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -59,7 +59,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 
 	if depth == "1" {
 		for _, cc := range owned {
-			hrefStr := calendarPath(c.basePath, owner, cc.URI)
+			hrefStr := common.CalendarPath(c.basePath, owner, cc.URI)
 			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
 			_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
 			_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: cc.DisplayName})
@@ -85,7 +85,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 			resps = append(resps, resp)
 		}
 
-		sharedBase := sharedRoot(c.basePath, owner)
+		sharedBase := common.CalendarSharedRoot(c.basePath, owner)
 		sharedResp := common.Response{Hrefs: []common.Href{{Value: sharedBase}}}
 		_ = sharedResp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
 		_ = sharedResp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Shared"})
@@ -179,10 +179,10 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 	var href string
 	var ownerHref string
 	if isSharedMount {
-		href = common.JoinURL(sharedRoot(c.basePath, requesterUID), collection) + "/"
+		href = common.JoinURL(common.CalendarSharedRoot(c.basePath, requesterUID), collection) + "/"
 		ownerHref = common.PrincipalURL(c.basePath, trueOwner)
 	} else {
-		href = calendarPath(c.basePath, owner, collection)
+		href = common.CalendarPath(c.basePath, owner, collection)
 		ownerHref = common.PrincipalURL(c.basePath, owner)
 	}
 
@@ -286,7 +286,7 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 }
 
 func (c *CalDAVResourceHandler) GetHomeSetProperty(basePath, uid string) interface{} {
-	return &common.Href{Value: calendarHome(basePath, uid)}
+	return &common.Href{Value: common.CalendarHome(basePath, uid)}
 }
 
 func (c *CalDAVResourceHandler) ownerPrincipalForCalendar(cal *storage.Calendar) string {

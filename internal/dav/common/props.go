@@ -1,7 +1,6 @@
 package common
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -55,10 +54,6 @@ type RawXMLValue struct {
 	out      interface{}
 }
 
-func NewRawXMLElement(name xml.Name, attr []xml.Attr, children []RawXMLValue) *RawXMLValue {
-	return &RawXMLValue{tok: xml.StartElement{Name: name, Attr: attr}, children: children}
-}
-
 func EncodeRawXMLElement(v interface{}) (*RawXMLValue, error) {
 	return &RawXMLValue{out: v}, nil
 }
@@ -109,24 +104,4 @@ func (val *RawXMLValue) MarshalXML(e *xml.Encoder, start xml.StartElement) error
 	default:
 		return e.EncodeToken(tok)
 	}
-}
-
-func (val *RawXMLValue) XMLName() (name xml.Name, ok bool) {
-	if start, ok := val.tok.(xml.StartElement); ok {
-		return start.Name, true
-	}
-	return xml.Name{}, false
-}
-
-func (val *RawXMLValue) Decode(v interface{}) error {
-	if val.out != nil {
-		return fmt.Errorf("cannot decode marshal-only XML value")
-	}
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	if err := val.MarshalXML(enc, xml.StartElement{}); err != nil {
-		return err
-	}
-	_ = enc.Flush()
-	return xml.Unmarshal(buf.Bytes(), v)
 }

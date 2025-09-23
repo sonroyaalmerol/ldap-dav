@@ -2,8 +2,6 @@ package caldav
 
 import (
 	"strings"
-
-	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 func splitResourcePath(urlPath, basePath string) (owner, collection string, rest []string) {
@@ -50,16 +48,4 @@ func splitResourcePath(urlPath, basePath string) (owner, collection string, rest
 		return parts[1], parts[2], parts[3:]
 	}
 	return "", "", nil
-}
-
-func calendarHome(basePath, uid string) string {
-	return common.JoinURL(basePath, "calendars", uid) + "/"
-}
-
-func calendarPath(basePath, ownerUID, calURI string) string {
-	return common.JoinURL(basePath, "calendars", ownerUID, calURI) + "/"
-}
-
-func sharedRoot(basePath, uid string) string {
-	return common.JoinURL(basePath, "calendars", uid, "shared") + "/"
 }

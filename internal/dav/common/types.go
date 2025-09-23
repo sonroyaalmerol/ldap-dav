@@ -142,36 +142,8 @@ type PropStat struct {
 }
 
 type Prop struct {
-	XMLName                       xml.Name                `xml:"DAV: prop"`
-	Raw                           []RawXMLValue           `xml:",any"`
-	ResourceType                  *ResourceType           `xml:"DAV: resourcetype,omitempty"`
-	DisplayName                   *string                 `xml:"DAV: displayname,omitempty"`
-	CurrentUserPrincipal          *Href                   `xml:"DAV: current-user-principal>href,omitempty"`
-	PrincipalURL                  *Href                   `xml:"DAV: principal-URL>href,omitempty"`
-	PrincipalCollectionSet        *PrincipalCollectionSet `xml:"DAV: principal-collection-set,omitempty"`
-	Owner                         *Href                   `xml:"DAV: owner>href,omitempty"`
-	SyncToken                     *string                 `xml:"DAV: sync-token,omitempty"`
-	ContentType                   *string                 `xml:"DAV: getcontenttype,omitempty"`
-	GetETag                       string                  `xml:"DAV: getetag,omitempty"`
-	GetLastModified               string                  `xml:"DAV: getlastmodified,omitempty"`
-	MatchesWithinLimits           *int                    `xml:"DAV: number-of-matches-within-limits,omitempty"`
-	ACL                           *AclProp                `xml:"DAV: acl,omitempty"`
-	QuotaAvailableBytes           *int64                  `xml:"DAV: quota-available-bytes,omitempty"`
-	QuotaUsedBytes                *int64                  `xml:"DAV: quota-used-bytes,omitempty"`
-	SupportedReportSet            *SupportedReportSet     `xml:"DAV: supported-report-set,omitempty"`
-	GetCTag                       *string                 `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
-	CalendarHomeSet               *Href                   `xml:"urn:ietf:params:xml:ns:caldav calendar-home-set>href,omitempty"`
-	SupportedCalendarComponentSet *SupportedCompSet       `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-component-set,omitempty"`
-	SupportedCalendarData         *SupportedCalData       `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-data,omitempty"`
-	CalendarDescription           *string                 `xml:"urn:ietf:params:xml:ns:caldav calendar-description,omitempty"`
-	CalendarTimezone              *string                 `xml:"urn:ietf:params:xml:ns:caldav calendar-timezone,omitempty"`
-	MaxResourceSize               *int                    `xml:"urn:ietf:params:xml:ns:caldav max-resource-size,omitempty"`
-	MinDateTime                   *string                 `xml:"urn:ietf:params:xml:ns:caldav min-date-time,omitempty"`
-	MaxDateTime                   *string                 `xml:"urn:ietf:params:xml:ns:caldav max-date-time,omitempty"`
-	MaxInstances                  *int                    `xml:"urn:ietf:params:xml:ns:caldav max-instances,omitempty"`
-	MaxAttendeesPerInstance       *int                    `xml:"urn:ietf:params:xml:ns:caldav max-attendees-per-instance,omitempty"`
-	SupportedCollationSet         *SupportedCollationSet  `xml:"urn:ietf:params:xml:ns:caldav supported-collation-set,omitempty"`
-	CalendarDataText              string                  `xml:"urn:ietf:params:xml:ns:caldav calendar-data,omitempty"`
+	XMLName xml.Name      `xml:"DAV: prop"`
+	Raw     []RawXMLValue `xml:",any"`
 }
 
 type PrincipalCollectionSet struct {
@@ -235,6 +207,11 @@ type Priv struct {
 	WriteContent *struct{} `xml:"DAV: write-content,omitempty"`
 	Bind         *struct{} `xml:"DAV: bind,omitempty"`
 	Unbind       *struct{} `xml:"DAV: unbind,omitempty"`
+}
+
+type CalendarHomeSet struct {
+	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-home-set"`
+	Hrefs   []Href   `xml:"href,omitempty"`
 }
 
 type SupportedReportSet struct {
