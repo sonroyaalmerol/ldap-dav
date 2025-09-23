@@ -2,24 +2,25 @@ package integration
 
 import (
 	"encoding/xml"
+	"html"
 	"regexp"
 	"strings"
 )
 
 // Minimal Multi-Status parser sufficient for validations (RFC 4918 §13, RFC 6578 adds sync-token)
 type multiStatus struct {
-	XMLName   xml.Name     `xml:"DAV: multistatus"`
-	Responses []msResponse `xml:"response"`
-	SyncToken string       `xml:"sync-token"`
+	XMLName   xml.Name     `xml:"{DAV:}multistatus"`
+	Responses []msResponse `xml:"{DAV:}response"`
+	SyncToken string       `xml:"{DAV:}sync-token"`
 }
 type msResponse struct {
-	Href     string     `xml:"href"`
-	PropStat []propStat `xml:"propstat"`
-	Status   string     `xml:"status"`
+	Href     string     `xml:"{DAV:}href"`
+	PropStat []propStat `xml:"{DAV:}propstat"`
+	Status   string     `xml:"{DAV:}status"`
 }
 type propStat struct {
-	Status  string `xml:"status"`
-	PropRaw anyXML `xml:"prop"`
+	Status  string `xml:"{DAV:}status"`
+	PropRaw anyXML `xml:"{DAV:}prop"`
 	// For simplicity, keep raw inner XML for flexible checks
 	PropXML string `xml:"-"`
 }
@@ -54,6 +55,7 @@ type icsInfo struct {
 
 func parseICS(s string) icsInfo {
 	// Normalize CRLF and unfold folded lines
+	s = html.UnescapeString(s)
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	lines := strings.Split(s, "\n")
 	var unfolded []string
