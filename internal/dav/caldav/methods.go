@@ -175,11 +175,46 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	pr := common.MustPrincipal(r.Context())
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
-	if owner == "" || len(rest) == 0 {
-		http.NotFound(w, r)
+
+	if owner == "" || calURI == "" {
+		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
+			owner, calURI, rest = o2, c2, nil
+		}
+	}
+
+	if owner == "" || calURI == "" {
+		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
+
+	if len(rest) == 0 {
+		if !common.SafeCollectionName(calURI) {
+			http.Error(w, "bad collection name", http.StatusBadRequest)
+			return
+		}
+
+		if pr.UserID != owner {
+			eff, err := h.aclProv.Effective(
+				r.Context(),
+				&directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display},
+				calURI,
+			)
+			if err != nil || !eff.CanDelete() {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+
+		if err := h.store.DeleteCalendar(owner, calURI); err != nil {
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	filename := rest[len(rest)-1]
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
@@ -193,7 +228,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	pr := common.MustPrincipal(r.Context())
+
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 		if err != nil || !eff.CanDelete() {

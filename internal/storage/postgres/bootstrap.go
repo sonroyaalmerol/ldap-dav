@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -50,4 +51,19 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 		)
 	`, id, ownerUser, grp, uri, displayName, desc, ctag, now)
 	return err
+}
+
+func (s *Store) DeleteCalendar(ownerUserID, calURI string) error {
+	ctx := context.Background()
+	cmdTag, err := s.pool.Exec(ctx, `
+		delete from calendars
+		where owner_user_id = $1 and uri = $2
+	`, ownerUserID, calURI)
+	if err != nil {
+		return err
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
