@@ -143,3 +143,44 @@ func ParseSeqToken(tok string) (int64, bool) {
 	}
 	return 0, false
 }
+
+func BuildFreeBusyICS(start, end time.Time, busyIntervals []ical.Interval, prodID string) []byte {
+	var buf strings.Builder
+
+	// VCALENDAR header
+	buf.WriteString("BEGIN:VCALENDAR\r\n")
+	buf.WriteString("VERSION:2.0\r\n")
+	buf.WriteString("PRODID:")
+	buf.WriteString(prodID)
+	buf.WriteString("\r\n")
+
+	// VFREEBUSY component (REQUIRED per RFC 4791 Section 7.10)
+	buf.WriteString("BEGIN:VFREEBUSY\r\n")
+
+	// Required properties per RFC 4791
+	buf.WriteString("DTSTAMP:")
+	buf.WriteString(time.Now().UTC().Format("20060102T150405Z"))
+	buf.WriteString("\r\n")
+
+	buf.WriteString("DTSTART:")
+	buf.WriteString(start.UTC().Format("20060102T150405Z"))
+	buf.WriteString("\r\n")
+
+	buf.WriteString("DTEND:")
+	buf.WriteString(end.UTC().Format("20060102T150405Z"))
+	buf.WriteString("\r\n")
+
+	// Optional FREEBUSY properties (empty if no busy intervals)
+	for _, interval := range busyIntervals {
+		buf.WriteString("FREEBUSY;FBTYPE=BUSY:")
+		buf.WriteString(interval.S.UTC().Format("20060102T150405Z"))
+		buf.WriteString("/")
+		buf.WriteString(interval.E.UTC().Format("20060102T150405Z"))
+		buf.WriteString("\r\n")
+	}
+
+	buf.WriteString("END:VFREEBUSY\r\n")
+	buf.WriteString("END:VCALENDAR\r\n")
+
+	return []byte(buf.String())
+}

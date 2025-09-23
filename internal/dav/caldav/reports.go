@@ -262,7 +262,7 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 	busy := h.buildBusyIntervals(objs, start, end)
 
 	// Generate and send free/busy response
-	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
+	icsData := common.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 	_, _ = w.Write(icsData)
 }
