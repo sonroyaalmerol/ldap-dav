@@ -1,10 +1,10 @@
 package caldav
 
 import (
+	"encoding/xml"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
@@ -33,11 +33,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	home := calendarHome(c.basePath, owner)
-	if !strings.HasSuffix(home, "/") {
-		home += "/"
-	}
 
-	// Only allow user to view own home listing
 	if u.UID != owner {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -55,45 +51,43 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	}
 
 	var resps []common.Response
-	// Home itself
-	resps = append(resps, common.Response{
-		Href: home,
-		Props: []common.PropStat{{Prop: common.Prop{
-			ResourceType: common.MakeCollectionResourcetype(),
-			DisplayName:  common.StrPtr("Calendar Home"),
-		}, Status: common.Ok()}},
-	})
+
+	homeResp := common.Response{Hrefs: []common.Href{{Value: home}}}
+	_ = homeResp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
+	_ = homeResp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Calendar Home"})
+	resps = append(resps, homeResp)
 
 	if depth == "1" {
-		// Owned calendars
 		for _, cc := range owned {
 			hrefStr := calendarPath(c.basePath, owner, cc.URI)
-			resps = append(resps, common.Response{
-				Href: hrefStr,
-				Props: []common.PropStat{{Prop: common.Prop{
-					ResourceType:                  common.MakeCalendarResourcetype(),
-					DisplayName:                   &cc.DisplayName,
-					Owner:                         &common.Href{Value: common.PrincipalURL(c.basePath, owner)},
-					SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-					GetCTag:                       &cc.CTag,
-					SyncToken:                     &cc.CTag,
-					ACL:                           common.BuildReadOnlyACL(r, c.basePath, cc.URI, owner, c.handlers.aclProv),
-				}, Status: common.Ok()},
-				}})
+			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+			_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
+			_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: cc.DisplayName})
+			_ = resp.EncodeProp(http.StatusOK, struct {
+				XMLName xml.Name `xml:"DAV: owner"`
+				Href    common.Href
+			}{Href: common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
+			_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+			_ = resp.EncodeProp(http.StatusOK, struct {
+				XMLName xml.Name `xml:"DAV: sync-token"`
+				Text    string   `xml:",chardata"`
+			}{Text: cc.CTag})
+			_ = resp.EncodeProp(http.StatusOK, struct {
+				XMLName xml.Name `xml:"http://calendarserver.org/ns/ getctag"`
+				Text    string   `xml:",chardata"`
+			}{Text: cc.CTag})
+			if acl := common.BuildReadOnlyACL(r, c.basePath, cc.URI, owner, c.handlers.aclProv); acl != nil {
+				_ = resp.EncodeProp(http.StatusOK, *acl)
+			}
+			resps = append(resps, resp)
 		}
 
-		// Shared calendars container
 		sharedBase := sharedRoot(c.basePath, owner)
-		if !strings.HasSuffix(sharedBase, "/") {
-			sharedBase += "/"
-		}
-		resps = append(resps, common.Response{
-			Href: sharedBase,
-			Props: []common.PropStat{{Prop: common.Prop{
-				ResourceType: common.MakeCollectionResourcetype(),
-				DisplayName:  common.StrPtr("Shared"),
-			}, Status: common.Ok()},
-			}})
+		sharedResp := common.Response{Hrefs: []common.Href{{Value: sharedBase}}}
+		_ = sharedResp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
+		_ = sharedResp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Shared"})
+		resps = append(resps, sharedResp)
+
 		all, err := c.handlers.store.ListAllCalendars(r.Context())
 		if err == nil {
 			for _, cc := range all {
@@ -102,50 +96,55 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 				}
 				if eff, aok := visible[cc.URI]; aok && eff.CanRead() {
 					hrefStr := common.JoinURL(sharedBase, cc.URI) + "/"
-					resps = append(resps, common.Response{
-						Href: hrefStr,
-						Props: []common.PropStat{{Prop: common.Prop{
-							ResourceType:                  common.MakeCalendarResourcetype(),
-							DisplayName:                   &cc.DisplayName,
-							Owner:                         &common.Href{Value: c.ownerPrincipalForCalendar(cc)},
-							SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-							GetCTag:                       &cc.CTag,
-							SyncToken:                     &cc.CTag,
-							ACL:                           common.BuildReadOnlyACL(r, c.basePath, cc.URI, owner, c.handlers.aclProv),
-						}, Status: common.Ok()},
-						}})
+					resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+					_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
+					_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: cc.DisplayName})
+					_ = resp.EncodeProp(http.StatusOK, struct {
+						XMLName xml.Name `xml:"DAV: owner"`
+						Href    common.Href
+					}{Href: common.Href{Value: c.ownerPrincipalForCalendar(cc)}})
+					_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+					_ = resp.EncodeProp(http.StatusOK, struct {
+						XMLName xml.Name `xml:"DAV: sync-token"`
+						Text    string   `xml:",chardata"`
+					}{Text: cc.CTag})
+					_ = resp.EncodeProp(http.StatusOK, struct {
+						XMLName xml.Name `xml:"http://calendarserver.org/ns/ getctag"`
+						Text    string   `xml:",chardata"`
+					}{Text: cc.CTag})
+					if acl := common.BuildReadOnlyACL(r, c.basePath, cc.URI, owner, c.handlers.aclProv); acl != nil {
+						_ = resp.EncodeProp(http.StatusOK, *acl)
+					}
+					resps = append(resps, resp)
 				}
 			}
 		}
 	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *http.Request, owner, collection, depth string) {
-	// owner here is the path owner (requester UID in /calendars/{owner}/...)
 	requesterUID := owner
 
-	// Resolve calendar by owner+uri
 	cals, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	var cal *storage.Calendar
-	for _, c := range cals {
-		if c.URI == collection {
-			cal = c
+	for _, cc := range cals {
+		if cc.URI == collection {
+			cal = cc
 			break
 		}
 	}
 
-	// If not owned and not the "shared" container, try shared mount resolution
 	var trueOwner string
 	isSharedMount := false
 	if cal == nil && collection != "shared" {
 		if sc, err := c.handlers.findCalendarByURI(r.Context(), collection); err == nil && sc != nil {
-			// ACL for the requester against the calendar URI
 			pr := common.MustPrincipal(r.Context())
 			if ok, err := c.handlers.aclCheckRead(r.Context(), pr, sc.URI, sc.OwnerUserID); err == nil && ok {
 				cal = sc
@@ -155,16 +154,14 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		}
 	}
 
-	// Shared container itself
 	if cal == nil && collection == "shared" {
-		resps := []common.Response{{
-			Href: common.JoinURL(c.basePath, "calendars", owner, "shared") + "/",
-			Props: []common.PropStat{{Prop: common.Prop{
-				ResourceType: common.MakeCollectionResourcetype(),
-				DisplayName:  common.StrPtr("Shared"),
-			}, Status: common.Ok()}},
-		}}
-		WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+		resp := common.Response{
+			Hrefs: []common.Href{{Value: common.JoinURL(c.basePath, "calendars", owner, "shared") + "/"}},
+		}
+		_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
+		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Shared"})
+		ms := common.MultiStatus{Responses: []common.Response{resp}}
+		_ = common.ServeMultiStatus(w, &ms)
 		return
 	}
 
@@ -173,65 +170,78 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Determine Href and Owner for the response
 	var href string
 	var ownerHref string
 	if isSharedMount {
-		// Href should be the mount path under the requester’s shared container
 		href = common.JoinURL(sharedRoot(c.basePath, requesterUID), collection) + "/"
-		// Owner should be the canonical principal of the true owner
 		ownerHref = common.PrincipalURL(c.basePath, trueOwner)
-		if !strings.HasSuffix(ownerHref, "/") {
-			ownerHref += "/"
-		}
 	} else {
-		// Owned calendar
 		href = calendarPath(c.basePath, owner, collection)
-		if !strings.HasSuffix(href, "/") {
-			href += "/"
-		}
 		ownerHref = common.PrincipalURL(c.basePath, owner)
-		if !strings.HasSuffix(ownerHref, "/") {
-			ownerHref += "/"
-		}
 	}
 
-	prop := common.Prop{
-		ResourceType:                  common.MakeCalendarResourcetype(),
-		DisplayName:                   &cal.DisplayName,
-		Owner:                         &common.Href{Value: ownerHref},
-		SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-		GetCTag:                       &cal.CTag,
-		SyncToken:                     &cal.CTag,
-		GetLastModified:               cal.UpdatedAt.UTC().Format(time.RFC1123),
-		ACL:                           common.BuildReadOnlyACL(r, c.basePath, collection, owner, c.handlers.aclProv),
+	propResp := common.Response{
+		Hrefs: []common.Href{{Value: href}},
+	}
+	_ = propResp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
+	_ = propResp.EncodeProp(http.StatusOK, common.DisplayName{Name: cal.DisplayName})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: owner"`
+		Href    common.Href
+	}{Href: common.Href{Value: ownerHref}})
+	_ = propResp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: sync-token"`
+		Text    string   `xml:",chardata"`
+	}{Text: cal.CTag})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"http://calendarserver.org/ns/ getctag"`
+		Text    string   `xml:",chardata"`
+	}{Text: cal.CTag})
 
-		// CalDAV-specific properties
-		CalendarDescription:     common.StrPtr(cal.Description),
-		CalendarTimezone:        c.getCalendarTimezone(cal),
-		SupportedCalendarData:   &common.SupportedCalData{ContentType: "text/calendar", Version: "2.0"},
-		MaxResourceSize:         common.IntPtr(c.getMaxResourceSize()),
-		MinDateTime:             common.StrPtr("19000101T000000Z"),
-		MaxDateTime:             common.StrPtr("20380119T031407Z"),
-		MaxInstances:            common.IntPtr(1000),
-		MaxAttendeesPerInstance: common.IntPtr(100),
-		SupportedCollationSet:   c.getSupportedCollationSet(),
-
-		// Quota properties
-		QuotaAvailableBytes: c.getQuotaAvailableBytes(cal),
-		QuotaUsedBytes:      c.getQuotaUsedBytes(cal),
-
-		// Supported reports
-		SupportedReportSet: c.getSupportedReportSet(),
+	if !cal.UpdatedAt.IsZero() {
+		_ = propResp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(cal.UpdatedAt.UTC())})
 	}
 
-	// Depth 0: collection props
-	resps := []common.Response{{
-		Href:  href,
-		Props: []common.PropStat{{Prop: prop, Status: common.Ok()}},
-	}}
+	if acl := common.BuildReadOnlyACL(r, c.basePath, collection, owner, c.handlers.aclProv); acl != nil {
+		_ = propResp.EncodeProp(http.StatusOK, *acl)
+	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+		Text    string   `xml:",chardata"`
+	}{Text: cal.Description})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-timezone"`
+		Text    string   `xml:",chardata"`
+	}{Text: c.getCalendarTimezone(cal)})
+
+	_ = propResp.EncodeProp(http.StatusOK, common.SupportedCalData{ContentType: "text/calendar", Version: "2.0"})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav max-resource-size"`
+		Size    int      `xml:",chardata"`
+	}{Size: c.getMaxResourceSize()})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav min-date-time"`
+		Text    string   `xml:",chardata"`
+	}{Text: "19000101T000000Z"})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav max-date-time"`
+		Text    string   `xml:",chardata"`
+	}{Text: "20380119T031407Z"})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav max-instances"`
+		N       int      `xml:",chardata"`
+	}{N: 1000})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav max-attendees-per-instance"`
+		N       int      `xml:",chardata"`
+	}{N: 100})
+
+	_ = propResp.EncodeProp(http.StatusOK, c.getSupportedCollationSetValue())
+
+	ms := common.MultiStatus{Responses: []common.Response{propResp}}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Request, owner, collection, object string) {
@@ -241,32 +251,29 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// ACL check read
 	pr := common.MustPrincipal(r.Context())
 	okRead, err := c.handlers.aclCheckRead(r.Context(), pr, collection, calOwner)
 	if err != nil || !okRead {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	_, err = c.handlers.store.GetObject(r.Context(), calendarID, uid)
+	obj, err := c.handlers.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	hrefStr := common.JoinURL(c.handlers.basePath, "calendars", owner, collection, uid+".ics")
-	resps := []common.Response{{
-		Href: hrefStr,
-		Props: []common.PropStat{{Prop: common.Prop{
-			ContentType: common.CalContentType(),
-			GetLastModified: func() string {
-				if obj, err := c.handlers.store.GetObject(r.Context(), calendarID, uid); err == nil && !obj.UpdatedAt.IsZero() {
-					return obj.UpdatedAt.UTC().Format(time.RFC1123)
-				}
-				return ""
-			}(),
-		}, Status: common.Ok()}},
-	}}
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: hrefStr}},
+	}
+	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
+	if !obj.UpdatedAt.IsZero() {
+		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(obj.UpdatedAt.UTC())})
+	}
+
+	ms := common.MultiStatus{Responses: []common.Response{resp}}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func (c *CalDAVResourceHandler) GetHomeSetProperty(basePath, uid string) interface{} {
@@ -277,22 +284,18 @@ func (c *CalDAVResourceHandler) ownerPrincipalForCalendar(cal *storage.Calendar)
 	if cal.OwnerUserID != "" {
 		return common.PrincipalURL(c.basePath, cal.OwnerUserID)
 	}
-	// could be group-owned; expose group principal path if implemented
 	return common.JoinURL(c.basePath, "principals")
 }
 
-func (c *CalDAVResourceHandler) getCalendarTimezone(cal *storage.Calendar) *string {
-	// TODO: implement proper with storage
-	// Default to UTC
-	return common.StrPtr("BEGIN:VTIMEZONE\r\nTZID:UTC\r\nEND:VTIMEZONE\r\n")
+func (c *CalDAVResourceHandler) getCalendarTimezone(_ *storage.Calendar) string {
+	return "BEGIN:VTIMEZONE\r\nTZID:UTC\r\nEND:VTIMEZONE\r\n"
 }
 
 func (c *CalDAVResourceHandler) getMaxResourceSize() int {
-	// Default 10MB limit
 	return 10 * 1024 * 1024
 }
 
-func (c *CalDAVResourceHandler) getSupportedCollationSet() *common.SupportedCollationSet {
+func (c *CalDAVResourceHandler) getSupportedCollationSetValue() interface{} {
 	return &common.SupportedCollationSet{
 		SupportedCollation: []common.SupportedCollation{
 			{Value: "i;ascii-casemap"},
@@ -302,26 +305,12 @@ func (c *CalDAVResourceHandler) getSupportedCollationSet() *common.SupportedColl
 	}
 }
 
-func (c *CalDAVResourceHandler) getSupportedReportSet() *common.SupportedReportSet {
-	return &common.SupportedReportSet{
-		SupportedReport: []common.SupportedReport{
-			{Report: common.ReportType{CalendarQuery: &struct{}{}}},
-			{Report: common.ReportType{CalendarMultiget: &struct{}{}}},
-			{Report: common.ReportType{FreeBusyQuery: &struct{}{}}},
-			{Report: common.ReportType{SyncCollection: &struct{}{}}},
-		},
-	}
-}
-
-func (c *CalDAVResourceHandler) getQuotaAvailableBytes(cal *storage.Calendar) *int64 {
-	// TODO: implement proper with storage
-	available := int64(1024 * 1024 * 1024) // 1GB default
+func (c *CalDAVResourceHandler) getQuotaAvailableBytes(_ *storage.Calendar) *int64 {
+	available := int64(1024 * 1024 * 1024)
 	return &available
 }
 
-func (c *CalDAVResourceHandler) getQuotaUsedBytes(cal *storage.Calendar) *int64 {
-	// TODO: implement proper with storage
+func (c *CalDAVResourceHandler) getQuotaUsedBytes(_ *storage.Calendar) *int64 {
 	used := int64(0)
-	// You might query your storage backend here to get actual usage
 	return &used
 }

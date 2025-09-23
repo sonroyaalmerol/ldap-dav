@@ -1,6 +1,7 @@
 package dav
 
 import (
+	"encoding/xml"
 	"io"
 	"net/http"
 	"path"
@@ -34,11 +35,11 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 		depth = "0"
 	}
 
-	_, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	_ = r.Body.Close()
 
 	if h.isPrincipalPath(r.URL.Path) {
-		h.propfindPrincipal(w, r, depth)
+		h.propfindPrincipal(w, r, depth, body)
 		return
 	}
 
@@ -49,7 +50,7 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.propfindRoot(w, r)
+	h.propfindRoot(w, r, body)
 }
 
 func (h *Handlers) propfindResource(w http.ResponseWriter, r *http.Request, depth string, handler ResourceHandler) {
@@ -67,7 +68,7 @@ func (h *Handlers) propfindResource(w http.ResponseWriter, r *http.Request, dept
 	}
 }
 
-func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, depth string) {
+func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ string, _ []byte) {
 	u, _ := common.CurrentUser(r.Context())
 	if u == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -75,74 +76,49 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, dep
 	}
 
 	self := common.PrincipalURL(h.basePath, u.UID)
-	if !strings.HasSuffix(self, "/") {
-		self += "/"
+
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: self}},
 	}
 
-	prop := common.Prop{
-		ResourceType:         common.MakePrincipalResourcetype(),
-		DisplayName:          &u.DisplayName,
-		PrincipalURL:         &common.Href{Value: self},
-		CurrentUserPrincipal: &common.Href{Value: self},
-	}
+	_ = resp.EncodeProp(http.StatusOK, common.ResourceType{
+		Collection: nil,
+		Principal:  &struct{}{},
+	})
+	_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: u.DisplayName})
+	_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: common.Href{Value: self}})
+	_ = resp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: principal-URL"`
+		Href    common.Href
+	}{Href: common.Href{Value: self}})
 
-	for _, handler := range h.resourceHandlers {
-		if homeSet := handler.GetHomeSetProperty(h.basePath, u.UID); homeSet != nil {
-			switch hs := homeSet.(type) {
-			case *common.Href:
-				if prop.CalendarHomeSet == nil {
-					prop.CalendarHomeSet = hs
-				}
-			}
-		}
-	}
-
-	ms := common.MultiStatus{
-		Resp: []common.Response{
-			{
-				Href: self,
-				Props: []common.PropStat{{
-					Prop:   prop,
-					Status: common.Ok(),
-				}},
-			},
-		},
-	}
-	common.WriteMultiStatus(w, ms)
+	ms := common.NewMultiStatus(resp)
+	_ = common.ServeMultiStatus(w, ms)
 }
 
-func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request) {
-	href := r.URL.Path
-	if !strings.HasSuffix(href, "/") {
-		href += "/"
+func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request, _ []byte) {
+	root := r.URL.Path
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: root}},
 	}
+	_ = resp.EncodeProp(http.StatusOK, common.ResourceType{
+		Collection: &struct{}{},
+	})
+	_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{
+		Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
+	})
+	_ = resp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: principal-URL"`
+		Href    common.Href
+	}{Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)}})
+	_ = resp.EncodeProp(http.StatusOK, common.PrincipalCollectionSet{
+		Hrefs: []common.Href{{Value: common.JoinURL(h.basePath, "principals") + "/"}},
+	})
 
-	ms := common.MultiStatus{
-		Resp: []common.Response{
-			{
-				Href: href,
-				Props: []common.PropStat{{
-					Prop: common.Prop{
-						ResourceType:           common.MakeCollectionResourcetype(),
-						CurrentUserPrincipal:   &common.Href{Value: ensureSlash(common.CurrentUserPrincipalHref(r.Context(), h.basePath))},
-						PrincipalURL:           &common.Href{Value: ensureSlash(common.CurrentUserPrincipalHref(r.Context(), h.basePath))},
-						PrincipalCollectionSet: &common.Hrefs{Values: []string{ensureSlash(common.JoinURL(h.basePath, "principals"))}},
-					},
-					Status: common.Ok(),
-				}},
-			},
-		},
-	}
-	common.WriteMultiStatus(w, ms)
+	ms := common.NewMultiStatus(resp)
+	_ = common.ServeMultiStatus(w, ms)
 }
 
 func (h *Handlers) RegisterResourceHandler(key string, handler ResourceHandler) {
 	h.resourceHandlers[key] = handler
-}
-
-func ensureSlash(s string) string {
-	if strings.HasSuffix(s, "/") {
-		return s
-	}
-	return s + "/"
 }

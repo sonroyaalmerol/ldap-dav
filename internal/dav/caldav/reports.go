@@ -1,6 +1,7 @@
 package caldav
 
 import (
+	"encoding/xml"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -55,14 +56,14 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	if start != nil && end != nil && common.ContainsComponent(comps, "VEVENT") {
 		resps = h.buildExpandedEventResponses(objs, *start, *end, props, owner, calURI)
 	} else {
-		// No time range or not querying events - return original objects
 		for _, o := range objs {
 			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
 			resps = append(resps, buildReportResponse(hrefStr, props, o))
 		}
 	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
@@ -102,31 +103,29 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Object) common.Response {
-	p := common.Prop{}
-	p.ContentType = common.CalContentType()
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: hrefStr}},
+	}
+	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
 	if props.CalendarData {
-		p.CalendarDataText = o.Data
+		type CalendarData struct {
+			XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+			Text    string   `xml:",chardata"`
+		}
+		_ = resp.EncodeProp(http.StatusOK, CalendarData{Text: o.Data})
 	}
 	if props.GetETag && o.ETag != "" {
-		gt := `"` + o.ETag + `"`
-		p.GetETag = gt
+		_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(o.ETag)})
 	}
-	// Always include last-modified if available
 	if !o.UpdatedAt.IsZero() {
-		// RFC 1123 format required by DAV:getlastmodified
-		p.GetLastModified = o.UpdatedAt.UTC().Format(time.RFC1123)
+		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(o.UpdatedAt)})
 	}
-	return common.Response{
-		Href: hrefStr,
-		Props: []common.PropStat{{
-			Prop:   p,
-			Status: common.Ok(),
-		}},
-	}
+	return resp
 }
 
 func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, sc common.SyncCollection) {
@@ -164,50 +163,47 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	}
 
 	colHref := calendarPath(h.basePath, owner, calURI)
-	resps := []common.Response{
-		{
-			Href: colHref,
-			Props: []common.PropStat{{
-				Prop: common.Prop{
-					ResourceType:                  common.MakeCalendarResourcetype(),
-					SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-					SyncToken:                     &curToken,
-				},
-				Status: common.Ok(),
-			}},
-		},
+
+	header := common.Response{
+		Hrefs: []common.Href{{Value: colHref}},
 	}
+	_ = header.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
+	_ = header.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+	_ = header.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: sync-token"`
+		Text    string   `xml:",chardata"`
+	}{Text: curToken})
+
+	var resps []common.Response
+	resps = append(resps, header)
 
 	if limit > 0 && len(changes) == limit {
 		n := len(changes)
-		resps[0].Props = append(resps[0].Props, common.PropStat{
-			Prop:   common.Prop{MatchesWithinLimits: &n},
-			Status: common.Ok(),
-		})
+		_ = header.EncodeProp(http.StatusOK, struct {
+			XMLName xml.Name `xml:"DAV: number-of-matches-within-limits"`
+			N       int      `xml:",chardata"`
+		}{N: n})
 	}
 
 	for _, ch := range changes {
 		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, ch.UID+".ics")
 		if ch.Deleted {
-			resps = append(resps, common.Response{
-				Href: hrefStr,
-				Props: []common.PropStat{{
-					Prop:   common.Prop{},
-					Status: "HTTP/1.1 404 Not Found",
-				}},
-			})
+			resp := common.Response{
+				Hrefs: []common.Href{{Value: hrefStr}},
+			}
+			resp.Status = &common.Status{Code: http.StatusNotFound}
+			resps = append(resps, resp)
 		} else {
-			resps = append(resps, common.Response{
-				Href: hrefStr,
-				Props: []common.PropStat{{
-					Prop:   common.Prop{ContentType: common.CalContentType()},
-					Status: common.Ok(),
-				}},
-			})
+			resp := common.Response{
+				Hrefs: []common.Href{{Value: hrefStr}},
+			}
+			_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
+			resps = append(resps, resp)
 		}
 	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	_ = common.ServeMultiStatus(w, &ms)
 }
 
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {
@@ -241,7 +237,6 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	// Get VEVENTs and expand recurrences for free/busy calculation
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -256,10 +251,8 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 			continue
 		}
 
-		// Parse and expand recurring events
 		events, err := ical.ParseCalendar([]byte(o.Data))
 		if err != nil {
-			// Fall back to using object's stored start/end times
 			if o.StartAt != nil && o.EndAt != nil {
 				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
 					s := common.MaxTime(*o.StartAt, start)
@@ -274,7 +267,6 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 
 		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
 		if err != nil {
-			// Fall back to stored times
 			if o.StartAt != nil && o.EndAt != nil {
 				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
 					s := common.MaxTime(*o.StartAt, start)
@@ -287,7 +279,6 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 			continue
 		}
 
-		// Add busy periods from all expanded instances
 		for _, event := range expandedEvents {
 			if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
 				s := common.MaxTime(event.Start, start)
@@ -304,5 +295,5 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	w.Write(icsData)
+	_, _ = w.Write(icsData)
 }
