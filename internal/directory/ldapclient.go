@@ -37,10 +37,12 @@ type LDAPClient struct {
 func NewLDAPClient(cfg config.LDAPConfig, logger zerolog.Logger) (*LDAPClient, error) {
 	l, err := dialLDAPAuto(cfg)
 	if err != nil {
+		logger.Error().Err(err).Str("url", cfg.URL).Msg("failed to dial LDAP")
 		return nil, err
 	}
 	if cfg.BindDN != "" {
 		if err := l.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
+			logger.Error().Err(err).Str("bind_dn", cfg.BindDN).Msg("initial bind failed")
 			l.Close()
 			return nil, err
 		}
@@ -64,7 +66,15 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 		nil,
 	)
 	res, err := l.conn.SearchWithPaging(searchReq, 1)
-	if err != nil || len(res.Entries) == 0 {
+	if err != nil {
+		l.logger.Error().Err(err).
+			Str("user_base_dn", l.cfg.UserBaseDN).
+			Str("username", username).
+			Msg("LDAP search failed in BindUser")
+		return nil, errors.New("user not found")
+	}
+	if len(res.Entries) == 0 {
+		l.logger.Debug().Str("username", username).Msg("user not found in BindUser search")
 		return nil, errors.New("user not found")
 	}
 	entry := res.Entries[0]
@@ -72,10 +82,12 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 
 	userConn, err := dialLDAPAuto(l.cfg)
 	if err != nil {
+		l.logger.Error().Err(err).Msg("failed to dial LDAP for user bind")
 		return nil, err
 	}
 	defer userConn.Close()
 	if err := userConn.Bind(userDN, password); err != nil {
+		l.logger.Debug().Err(err).Str("user_dn", userDN).Msg("user bind failed")
 		return nil, err
 	}
 
@@ -98,7 +110,16 @@ func (l *LDAPClient) LookupUserByAttr(ctx context.Context, attr, value string) (
 		nil,
 	)
 	res, err := l.conn.Search(searchReq)
-	if err != nil || len(res.Entries) == 0 {
+	if err != nil {
+		l.logger.Error().Err(err).
+			Str("attr", attr).
+			Str("value", value).
+			Str("user_base_dn", l.cfg.UserBaseDN).
+			Msg("LDAP search failed in LookupUserByAttr")
+		return nil, errors.New("user not found")
+	}
+	if len(res.Entries) == 0 {
+		l.logger.Debug().Str("attr", attr).Str("value", value).Msg("user not found in LookupUserByAttr")
 		return nil, errors.New("user not found")
 	}
 	e := res.Entries[0]
@@ -124,6 +145,11 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 	)
 	res, err := l.conn.Search(search)
 	if err != nil {
+		l.logger.Error().Err(err).
+			Str("group_base_dn", l.cfg.GroupBaseDN).
+			Str("member_attr", l.cfg.MemberAttr).
+			Str("user_dn", user.DN).
+			Msg("LDAP search failed in UserGroupsACL")
 		return nil, err
 	}
 	var acls []GroupACL
@@ -151,6 +177,7 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("token="+token))
 	if err != nil {
+		l.logger.Error().Err(err).Msg("failed to build introspection request")
 		return false, "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -159,10 +186,12 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		l.logger.Error().Err(err).Str("url", url).Msg("introspection HTTP request failed")
 		return false, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		l.logger.Debug().Int("status", resp.StatusCode).Msg("token introspection not active")
 		return false, "", nil
 	}
 	var out struct {
@@ -170,6 +199,7 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 		Sub    string `json:"sub"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		l.logger.Error().Err(err).Msg("failed to decode introspection response")
 		return false, "", err
 	}
 	return out.Active, out.Sub, nil
