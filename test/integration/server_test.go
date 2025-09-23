@@ -301,12 +301,6 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		}
 	}
 
-	{
-		// cleanup: delete created event and validate
-		resourceURL := baseURL + basePath + "/calendars/alice/shared/team/evt1.ics"
-		deleteAndValidate(t, client, resourceURL, authz)
-	}
-
 	// REPORT calendar-query on shared team
 	{
 		body := `<?xml version="1.0" encoding="utf-8" ?>
