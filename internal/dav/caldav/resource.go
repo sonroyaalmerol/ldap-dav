@@ -67,7 +67,10 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 				XMLName xml.Name `xml:"DAV: owner"`
 				Href    common.Href
 			}{Href: common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
-			_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+			_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{
+				Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}},
+			})
+			_ = resp.EncodeProp(http.StatusOK, supportedReportSetValue())
 			_ = resp.EncodeProp(http.StatusOK, struct {
 				XMLName xml.Name `xml:"DAV: sync-token"`
 				Text    string   `xml:",chardata"`
@@ -103,7 +106,10 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 						XMLName xml.Name `xml:"DAV: owner"`
 						Href    common.Href
 					}{Href: common.Href{Value: c.ownerPrincipalForCalendar(cc)}})
-					_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+					_ = resp.EncodeProp(http.StatusOK, common.SupportedCompSet{
+						Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}},
+					})
+					_ = resp.EncodeProp(http.StatusOK, supportedReportSetValue())
 					_ = resp.EncodeProp(http.StatusOK, struct {
 						XMLName xml.Name `xml:"DAV: sync-token"`
 						Text    string   `xml:",chardata"`
@@ -189,7 +195,10 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		XMLName xml.Name `xml:"DAV: owner"`
 		Href    common.Href
 	}{Href: common.Href{Value: ownerHref}})
-	_ = propResp.EncodeProp(http.StatusOK, common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}})
+	_ = propResp.EncodeProp(http.StatusOK, common.SupportedCompSet{
+		Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}},
+	})
+	_ = propResp.EncodeProp(http.StatusOK, supportedReportSetValue())
 	_ = propResp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: sync-token"`
 		Text    string   `xml:",chardata"`
@@ -305,12 +314,12 @@ func (c *CalDAVResourceHandler) getSupportedCollationSetValue() interface{} {
 	}
 }
 
-func (c *CalDAVResourceHandler) getQuotaAvailableBytes(_ *storage.Calendar) *int64 {
-	available := int64(1024 * 1024 * 1024)
-	return &available
-}
-
-func (c *CalDAVResourceHandler) getQuotaUsedBytes(_ *storage.Calendar) *int64 {
-	used := int64(0)
-	return &used
+func supportedReportSetValue() interface{} {
+	return &common.SupportedReportSet{
+		SupportedReport: []common.SupportedReport{
+			{Report: common.ReportType{CalendarQuery: &struct{}{}}},
+			{Report: common.ReportType{CalendarMultiget: &struct{}{}}},
+			{Report: common.ReportType{SyncCollection: &struct{}{}}},
+		},
+	}
 }

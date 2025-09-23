@@ -1,6 +1,7 @@
 package caldav
 
 import (
+	"context"
 	"encoding/xml"
 	"io"
 	"net/http"
@@ -209,6 +210,19 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
+	cals, err := h.store.ListCalendarsByOwnerUser(ctx, owner)
+	if err != nil {
+		return false
+	}
+	for _, c := range cals {
+		if c.URI == uri {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
@@ -221,14 +235,19 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !common.SafeCollectionName(calURI) {
+		http.Error(w, "bad collection name", http.StatusBadRequest)
+		return
+	}
+
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	_ = r.Body.Close()
 
 	type mkcolProp struct {
-		XMLName             xml.Name `xml:"DAV: prop"`
-		DisplayName         *string  `xml:"DAV: displayname"`
-		CalendarDescription *string  `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
-		ResourceType        struct {
+		XMLName      xml.Name `xml:"DAV: prop"`
+		DisplayName  *string  `xml:"DAV: displayname"`
+		Description  *string  `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+		ResourceType struct {
 			Calendar *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar"`
 		} `xml:"DAV: resourcetype"`
 	}
@@ -250,20 +269,20 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.calendarExists(r.Context(), owner, calURI) {
+		http.Error(w, "conflict", http.StatusConflict)
+		return
+	}
+
 	var displayName string
 	var description string
 	if mkcolReq.Set != nil {
 		if mkcolReq.Set.Prop.DisplayName != nil {
 			displayName = *mkcolReq.Set.Prop.DisplayName
 		}
-		if mkcolReq.Set.Prop.CalendarDescription != nil {
-			description = *mkcolReq.Set.Prop.CalendarDescription
+		if mkcolReq.Set.Prop.Description != nil {
+			description = *mkcolReq.Set.Prop.Description
 		}
-	}
-
-	if !common.SafeSegment(calURI) {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
 	}
 
 	newCal := storage.Calendar{
@@ -289,6 +308,16 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	pr := common.MustPrincipal(r.Context())
 	if pr.UserID != owner {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	if !common.SafeCollectionName(calURI) {
+		http.Error(w, "bad collection name", http.StatusBadRequest)
+		return
+	}
+
+	if h.calendarExists(r.Context(), owner, calURI) {
+		http.Error(w, "conflict", http.StatusConflict)
 		return
 	}
 
@@ -322,11 +351,6 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	}
-
-	if !common.SafeSegment(calURI) {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
 	}
 
 	newCal := storage.Calendar{
