@@ -140,6 +140,9 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Parse requested properties for per-member responses
+	props := common.ParsePropRequest(sc.Prop)
+
 	curToken, _, err := h.store.GetSyncInfo(r.Context(), calendarID)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -213,36 +216,51 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		http.NotFound(w, r)
 		return
 	}
+
 	pr := common.MustPrincipal(r.Context())
 	if ok := h.mustCanRead(w, r.Context(), pr, calURI, calOwner); !ok {
 		return
 	}
 
+	// Validate and parse time range (required per RFC 4791)
 	if fb.Time == nil || fb.Time.Start == "" || fb.Time.End == "" {
 		http.Error(w, "time-range required", http.StatusBadRequest)
 		return
 	}
+
 	start, err := common.ParseICalTime(fb.Time.Start)
 	if err != nil {
 		http.Error(w, "bad start", http.StatusBadRequest)
 		return
 	}
+
 	end, err := common.ParseICalTime(fb.Time.End)
 	if err != nil {
 		http.Error(w, "bad end", http.StatusBadRequest)
 		return
 	}
+
 	if !end.After(start) {
 		http.Error(w, "end must be after start", http.StatusBadRequest)
 		return
 	}
 
-	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, nil, nil)
+	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
 	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
+	// Process events and build busy intervals
+	busy := h.buildBusyIntervals(objs, start, end)
+
+	// Generate and send free/busy response
+	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	_, _ = w.Write(icsData)
+}
+
+func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Time) []ical.Interval {
 	var busy []ical.Interval
 	expander := ical.NewRecurrenceExpander(time.UTC)
 
@@ -253,47 +271,54 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 
 		events, err := ical.ParseCalendar([]byte(o.Data))
 		if err != nil {
-			if o.StartAt != nil && o.EndAt != nil {
-				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
-					s := common.MaxTime(*o.StartAt, start)
-					e := common.MinTime(*o.EndAt, end)
-					if e.After(s) {
-						busy = append(busy, ical.Interval{S: s, E: e})
-					}
-				}
+			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 			continue
 		}
 
 		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
 		if err != nil {
-			if o.StartAt != nil && o.EndAt != nil {
-				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
-					s := common.MaxTime(*o.StartAt, start)
-					e := common.MinTime(*o.EndAt, end)
-					if e.After(s) {
-						busy = append(busy, ical.Interval{S: s, E: e})
-					}
-				}
+			// Fallback to stored start/end times if expansion fails
+			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 			continue
 		}
 
+		// Convert expanded events to intervals
 		for _, event := range expandedEvents {
-			if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
-				s := common.MaxTime(event.Start, start)
-				e := common.MinTime(event.End, end)
-				if e.After(s) {
-					busy = append(busy, ical.Interval{S: s, E: e})
-				}
+			if interval := h.eventToInterval(event, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 		}
 	}
 
-	busy = common.MergeIntervalsFB(busy)
+	return common.MergeIntervalsFB(busy)
+}
 
-	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
+func (h *Handlers) extractFallbackInterval(o *storage.Object, start, end time.Time) *ical.Interval {
+	if o.StartAt == nil || o.EndAt == nil {
+		return nil
+	}
 
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	_, _ = w.Write(icsData)
+	if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
+		s := common.MaxTime(*o.StartAt, start)
+		e := common.MinTime(*o.EndAt, end)
+		if e.After(s) {
+			return &ical.Interval{S: s, E: e}
+		}
+	}
+	return nil
+}
+
+func (h *Handlers) eventToInterval(event *ical.Event, start, end time.Time) *ical.Interval {
+	if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
+		s := common.MaxTime(event.Start, start)
+		e := common.MinTime(event.End, end)
+		if e.After(s) {
+			return &ical.Interval{S: s, E: e}
+		}
+	}
+	return nil
 }

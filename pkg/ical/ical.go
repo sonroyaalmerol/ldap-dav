@@ -98,8 +98,10 @@ func BuildFreeBusyICS(start, end time.Time, busyIntervals []Interval, prodID str
 		Props: ical.Props{},
 	}
 
+	// Required properties per RFC 4791
 	freeBusy.Props.SetDateTime(ical.PropDateTimeStart, start.UTC())
 	freeBusy.Props.SetDateTime(ical.PropDateTimeEnd, end.UTC())
+	freeBusy.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
 
 	for _, interval := range busyIntervals {
 		prop := ical.NewProp(ical.PropFreeBusy)
