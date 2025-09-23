@@ -84,6 +84,7 @@ func (r *Router) handleDAVRequest(w http.ResponseWriter, req *http.Request) {
 
 	p, err := r.authenticate(req)
 	if err != nil || p == nil {
+		r.logAttempt(req, "", false, err)
 		w.Header().Set("WWW-Authenticate", `Basic realm="DAV", charset="UTF-8"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -193,12 +194,19 @@ func (r *Router) logAttempt(req *http.Request, username string, ok bool, authErr
 	if i := strings.IndexByte(authz, ' '); i > 0 {
 		authType = strings.ToLower(authz[:i])
 	}
-	errMsg := ""
+
+	logEvent := r.logger.Info().
+		Bool("auth_success", ok).
+		Str("user", username).
+		Str("method", req.Method).
+		Str("path", req.URL.Path).
+		Str("ip", ip).
+		Str("user_agent", ua).
+		Str("auth_type", authType)
+
 	if authErr != nil {
-		errMsg = authErr.Error()
+		logEvent = logEvent.Str("error", authErr.Error())
 	}
-	r.logger.Printf(
-		`auth attempt ok=%t user=%q method=%q path=%q ip=%q ua=%q auth=%q err=%q`,
-		ok, username, req.Method, req.URL.Path, ip, ua, authType, errMsg,
-	)
+
+	logEvent.Msg("auth attempt")
 }

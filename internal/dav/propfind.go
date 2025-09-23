@@ -35,7 +35,12 @@ func (h *Handlers) HandlePropfind(w http.ResponseWriter, r *http.Request) {
 		depth = "0"
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read PROPFIND body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 
 	if h.isPrincipalPath(r.URL.Path) {
@@ -71,6 +76,7 @@ func (h *Handlers) propfindResource(w http.ResponseWriter, r *http.Request, dept
 func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ string, _ []byte) {
 	u, _ := common.CurrentUser(r.Context())
 	if u == nil {
+		h.logger.Error().Msg("unauthorized principal PROPFIND request")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -81,20 +87,32 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ s
 		Hrefs: []common.Href{{Value: self}},
 	}
 
-	_ = resp.EncodeProp(http.StatusOK, common.ResourceType{
+	if err := resp.EncodeProp(http.StatusOK, common.ResourceType{
 		Collection: nil,
 		Principal:  &struct{}{},
-	})
-	_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: u.DisplayName})
-	_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: common.Href{Value: self}})
-	_ = resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}})
-	_ = resp.EncodeProp(http.StatusOK, struct {
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode ResourceType property")
+	}
+	if err := resp.EncodeProp(http.StatusOK, common.DisplayName{Name: u.DisplayName}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode DisplayName property")
+	}
+	if err := resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: common.Href{Value: self}}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode CurrentUserPrincipal property")
+	}
+	if err := resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode CalendarHomeSet property")
+	}
+	if err := resp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: principal-URL"`
 		Href    common.Href
-	}{Href: common.Href{Value: self}})
+	}{Href: common.Href{Value: self}}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode principal-URL property")
+	}
 
 	ms := common.NewMultiStatus(resp)
-	_ = common.ServeMultiStatus(w, ms)
+	if err := common.ServeMultiStatus(w, ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for principal")
+	}
 }
 
 func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request, _ []byte) {
@@ -102,22 +120,32 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request, _ []byte
 	resp := common.Response{
 		Hrefs: []common.Href{{Value: root}},
 	}
-	_ = resp.EncodeProp(http.StatusOK, common.ResourceType{
+	if err := resp.EncodeProp(http.StatusOK, common.ResourceType{
 		Collection: &struct{}{},
-	})
-	_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode ResourceType for root")
+	}
+	if err := resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{
 		Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
-	})
-	_ = resp.EncodeProp(http.StatusOK, struct {
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode CurrentUserPrincipal for root")
+	}
+	if err := resp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: principal-URL"`
 		Href    common.Href
-	}{Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)}})
-	_ = resp.EncodeProp(http.StatusOK, common.PrincipalCollectionSet{
+	}{Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)}}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode principal-URL for root")
+	}
+	if err := resp.EncodeProp(http.StatusOK, common.PrincipalCollectionSet{
 		Hrefs: []common.Href{{Value: common.JoinURL(h.basePath, "principals") + "/"}},
-	})
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode PrincipalCollectionSet for root")
+	}
 
 	ms := common.NewMultiStatus(resp)
-	_ = common.ServeMultiStatus(w, ms)
+	if err := common.ServeMultiStatus(w, ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for root")
+	}
 }
 
 func (h *Handlers) RegisterResourceHandler(key string, handler ResourceHandler) {

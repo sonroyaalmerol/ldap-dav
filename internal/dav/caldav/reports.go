@@ -17,6 +17,10 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in calendar-query")
 		http.NotFound(w, r)
 		return
 	}
@@ -48,6 +52,9 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, comps, start, end)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to list objects in calendar-query")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -64,7 +71,9 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	}
 
 	ms := common.MultiStatus{Responses: resps}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for calendar-query")
+	}
 }
 
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
@@ -82,15 +91,28 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 
 		calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("owner", owner).
+				Str("calendar", calURI).
+				Msg("failed to resolve calendar in multiget")
 			continue
 		}
 		pr := common.MustPrincipal(r.Context())
 		okRead, err := h.aclCheckRead(r.Context(), pr, calURI, calOwner)
 		if err != nil || !okRead {
+			h.logger.Debug().Err(err).
+				Bool("can_read", okRead).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in multiget")
 			continue
 		}
 		o, err := h.store.GetObject(r.Context(), calendarID, uid)
 		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("calendarID", calendarID).
+				Str("uid", uid).
+				Msg("failed to get object in multiget")
 			continue
 		}
 
@@ -105,7 +127,9 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
 	ms := common.MultiStatus{Responses: resps}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for calendar-multiget")
+	}
 }
 
 func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Object) common.Response {
@@ -133,6 +157,10 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in sync-collection")
 		http.NotFound(w, r)
 		return
 	}
@@ -145,6 +173,9 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 
 	curToken, _, err := h.store.GetSyncInfo(r.Context(), calendarID)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to get sync info")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -161,14 +192,17 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	}
 	changes, _, err := h.store.ListChangesSince(r.Context(), calendarID, sinceSeq, limit)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Int64("since", sinceSeq).
+			Int("limit", limit).
+			Msg("failed to list changes")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	var resps []common.Response
 
-	// Build HREFs relative to the REPORT target collection path.
-	// r.URL.Path is like: <basePath>/calendars/<owner>/<calURI...>/
 	baseHref := r.URL.Path
 	if !strings.HasSuffix(baseHref, "/") {
 		baseHref += "/"
@@ -184,15 +218,16 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 			resps = append(resps, resp)
 		} else {
 			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
-			// Return only requested properties. For sync, clients typically request getetag.
-			// Fetch object if any property requires it.
 			var obj *storage.Object
 			var getErr error
 			needObject := props.CalendarData || props.GetETag
 			if needObject {
 				obj, getErr = h.store.GetObject(r.Context(), calendarID, ch.UID)
 				if getErr != nil {
-					// Object disappeared between change listing and fetch; treat like deleted.
+					h.logger.Debug().Err(getErr).
+						Str("calendarID", calendarID).
+						Str("uid", ch.UID).
+						Msg("object disappeared between change listing and fetch")
 					resp.Status = &common.Status{Code: http.StatusNotFound}
 					resps = append(resps, resp)
 					continue
@@ -212,7 +247,6 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	// RFC 6578: top-level sync-token and number-of-matches-within-limits
 	ms := common.MultiStatus{
 		Responses: resps,
 		SyncToken: curToken,
@@ -220,13 +254,19 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	if limit > 0 && len(changes) == limit {
 		ms.NumberOfMatchesWithinLimits = fmt.Sprintf("%d", len(changes))
 	}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for sync-collection")
+	}
 }
 
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in free-busy-query")
 		http.NotFound(w, r)
 		return
 	}
@@ -236,42 +276,51 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	// Validate and parse time range (required per RFC 4791)
 	if fb.Time == nil || fb.Time.Start == "" || fb.Time.End == "" {
+		h.logger.Error().Msg("free-busy query missing required time-range")
 		http.Error(w, "time-range required", http.StatusBadRequest)
 		return
 	}
 
 	start, err := common.ParseICalTime(fb.Time.Start)
 	if err != nil {
+		h.logger.Error().Err(err).Str("start", fb.Time.Start).Msg("bad start time in free-busy query")
 		http.Error(w, "bad start", http.StatusBadRequest)
 		return
 	}
 
 	end, err := common.ParseICalTime(fb.Time.End)
 	if err != nil {
+		h.logger.Error().Err(err).Str("end", fb.Time.End).Msg("bad end time in free-busy query")
 		http.Error(w, "bad end", http.StatusBadRequest)
 		return
 	}
 
 	if !end.After(start) {
+		h.logger.Error().
+			Time("start", start).
+			Time("end", end).
+			Msg("invalid time range in free-busy query")
 		http.Error(w, "end must be after start", http.StatusBadRequest)
 		return
 	}
 
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to list events for free-busy query")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
-	// Process events and build busy intervals
 	busy := h.buildBusyIntervals(objs, start, end)
 
-	// Generate and send free/busy response
 	icsData := common.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	_, _ = w.Write(icsData)
+	if _, err := w.Write(icsData); err != nil {
+		h.logger.Error().Err(err).Msg("failed to write free-busy response")
+	}
 }
 
 func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Time) []ical.Interval {
@@ -285,6 +334,9 @@ func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Ti
 
 		events, err := ical.ParseCalendar([]byte(o.Data))
 		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("uid", o.UID).
+				Msg("failed to parse calendar, using fallback interval if available")
 			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
 				busy = append(busy, *interval)
 			}
@@ -293,14 +345,15 @@ func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Ti
 
 		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
 		if err != nil {
-			// Fallback to stored start/end times if expansion fails
+			h.logger.Debug().Err(err).
+				Str("uid", o.UID).
+				Msg("failed to expand recurrences, using fallback interval if available")
 			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
 				busy = append(busy, *interval)
 			}
 			continue
 		}
 
-		// Convert expanded events to intervals
 		for _, event := range expandedEvents {
 			if interval := h.eventToInterval(event, start, end); interval != nil {
 				busy = append(busy, *interval)

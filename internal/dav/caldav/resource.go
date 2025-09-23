@@ -29,23 +29,27 @@ func (c *CalDAVResourceHandler) SplitResourcePath(urlPath string) (owner, collec
 func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Request, owner, depth string) {
 	u, _ := common.CurrentUser(r.Context())
 	if u == nil {
+		c.handlers.logger.Error().Str("path", r.URL.Path).Msg("PROPFIND home unauthorized")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	home := common.CalendarHome(c.basePath, owner)
 
 	if u.UID != owner {
+		c.handlers.logger.Debug().Str("user", u.UID).Str("owner", owner).Msg("PROPFIND home forbidden - user mismatch")
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	owned, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
 	if err != nil {
+		c.handlers.logger.Error().Err(err).Str("owner", owner).Msg("failed to list owned calendars in PROPFIND home")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	visible, err := c.handlers.aclProv.VisibleCalendars(r.Context(), u)
 	if err != nil {
+		c.handlers.logger.Error().Err(err).Str("user", u.UID).Msg("failed to compute visible calendars in PROPFIND home")
 		http.Error(w, "acl error", http.StatusInternalServerError)
 		return
 	}
@@ -96,7 +100,9 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		resps = append(resps, sharedResp)
 
 		all, err := c.handlers.store.ListAllCalendars(r.Context())
-		if err == nil {
+		if err != nil {
+			c.handlers.logger.Error().Err(err).Msg("failed to list all calendars in PROPFIND home")
+		} else {
 			for _, cc := range all {
 				if cc.OwnerUserID == owner {
 					continue
@@ -136,7 +142,9 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	}
 
 	ms := common.MultiStatus{Responses: resps}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		c.handlers.logger.Error().Err(err).Msg("failed to serve MultiStatus in PROPFIND home")
+	}
 }
 
 func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *http.Request, owner, collection, depth string) {
@@ -144,6 +152,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 
 	cals, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
 	if err != nil {
+		c.handlers.logger.Error().Err(err).Str("owner", owner).Msg("failed to list calendars by owner in PROPFIND collection")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -164,6 +173,11 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 				cal = sc
 				trueOwner = sc.OwnerUserID
 				isSharedMount = true
+			} else if err != nil {
+				c.handlers.logger.Error().Err(err).
+					Str("calendar", sc.URI).
+					Str("owner", sc.OwnerUserID).
+					Msg("ACL check failed in PROPFIND collection reading shared calendar")
 			}
 		}
 	}
@@ -175,11 +189,14 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
 		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Shared"})
 		ms := common.MultiStatus{Responses: []common.Response{resp}}
-		_ = common.ServeMultiStatus(w, &ms)
+		if err := common.ServeMultiStatus(w, &ms); err != nil {
+			c.handlers.logger.Error().Err(err).Msg("failed to serve MultiStatus for PROPFIND shared collection")
+		}
 		return
 	}
 
 	if cal == nil {
+		c.handlers.logger.Debug().Str("owner", owner).Str("collection", collection).Msg("collection not found in PROPFIND")
 		http.NotFound(w, r)
 		return
 	}
@@ -262,24 +279,40 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 	_ = propResp.EncodeProp(http.StatusOK, c.getSupportedCollationSetValue())
 
 	ms := common.MultiStatus{Responses: []common.Response{propResp}}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		c.handlers.logger.Error().Err(err).Msg("failed to serve MultiStatus for PROPFIND collection")
+	}
 }
 
 func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Request, owner, collection, object string) {
 	uid := strings.TrimSuffix(object, filepath.Ext(object))
 	calendarID, calOwner, err := c.handlers.resolveCalendar(r.Context(), owner, collection)
 	if err != nil {
+		c.handlers.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("collection", collection).
+			Str("object", object).
+			Msg("failed to resolve calendar in PROPFIND object")
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	pr := common.MustPrincipal(r.Context())
 	okRead, err := c.handlers.aclCheckRead(r.Context(), pr, collection, calOwner)
 	if err != nil || !okRead {
+		c.handlers.logger.Debug().Err(err).
+			Bool("can_read", okRead).
+			Str("user", pr.UserID).
+			Str("collection", collection).
+			Msg("ACL check failed or denied in PROPFIND object")
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	obj, err := c.handlers.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
+		c.handlers.logger.Debug().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("object not found in PROPFIND object")
 		http.NotFound(w, r)
 		return
 	}
@@ -294,7 +327,9 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 	}
 
 	ms := common.MultiStatus{Responses: []common.Response{resp}}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		c.handlers.logger.Error().Err(err).Msg("failed to serve MultiStatus for PROPFIND object")
+	}
 }
 
 func (c *CalDAVResourceHandler) GetHomeSetProperty(basePath, uid string) interface{} {

@@ -27,6 +27,7 @@ func (h *Handlers) HandleHead(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
+		h.logger.Debug().Str("path", r.URL.Path).Msg("GET request with invalid path")
 		http.NotFound(w, r)
 		return
 	}
@@ -34,12 +35,20 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
+		h.logger.Error().
+			Str("calendar", calURI).
+			Str("uid", uid).
+			Msg("GET request with unsafe path segments")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in GET")
 		http.NotFound(w, r)
 		return
 	}
@@ -49,6 +58,10 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	obj, err := h.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("failed to get object in GET")
 		http.NotFound(w, r)
 		return
 	}
@@ -70,23 +83,33 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
+		h.logger.Debug().Str("path", r.URL.Path).Msg("PUT request with invalid path")
 		http.NotFound(w, r)
 		return
 	}
 	filename := rest[len(rest)-1]
 	if !strings.HasSuffix(strings.ToLower(filename), ".ics") {
+		h.logger.Error().Str("filename", filename).Msg("PUT request with invalid filename")
 		http.Error(w, "bad object name", http.StatusBadRequest)
 		return
 	}
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
+		h.logger.Error().
+			Str("calendar", calURI).
+			Str("uid", uid).
+			Msg("PUT request with unsafe path segments")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in PUT")
 		http.NotFound(w, r)
 		return
 	}
@@ -101,27 +124,50 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-		if err != nil || !(eff.CanCreate() || eff.CanEdit()) {
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in PUT")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !(eff.CanCreate() || eff.CanEdit()) {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("insufficient permissions for PUT")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
 
 	maxICS := h.cfg.HTTP.MaxICSBytes
-	raw, _ := io.ReadAll(io.LimitReader(r.Body, maxICS+1))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxICS+1))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read PUT body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 	if len(raw) == 0 {
+		h.logger.Error().Msg("empty body in PUT request")
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
 	}
 
 	if maxICS > 0 && int64(len(raw)) > maxICS {
+		h.logger.Error().
+			Int("size", len(raw)).
+			Int64("max", maxICS).
+			Msg("payload too large in PUT")
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
 	compType, err := ical.DetectICSComponent(raw)
 	if err != nil {
+		h.logger.Error().Err(err).Msg("unsupported calendar component in PUT")
 		http.Error(w, "unsupported calendar component", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -142,10 +188,16 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
 	if wantNew && existing != nil {
+		h.logger.Debug().Str("uid", uid).Msg("precondition failed - object exists")
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
 	if match != "" && existing != nil && existing.ETag != match {
+		h.logger.Debug().
+			Str("uid", uid).
+			Str("expected_etag", match).
+			Str("actual_etag", existing.ETag).
+			Msg("precondition failed - etag mismatch")
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
@@ -164,7 +216,13 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	_, _, _ = h.store.RecordChange(r.Context(), calendarID, uid, false)
+	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, false)
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("RecordChange failed")
+	}
 
 	w.Header().Set("ETag", `"`+obj.ETag+`"`)
 	if existing == nil {
@@ -185,12 +243,18 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if owner == "" || calURI == "" {
+		h.logger.Error().
+			Str("path", r.URL.Path).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("DELETE request with invalid path")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
 	if len(rest) == 0 {
 		if !common.SafeCollectionName(calURI) {
+			h.logger.Error().Str("calendar", calURI).Msg("unsafe collection name in DELETE")
 			http.Error(w, "bad collection name", http.StatusBadRequest)
 			return
 		}
@@ -201,13 +265,29 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 				&directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display},
 				calURI,
 			)
-			if err != nil || !eff.CanDelete() {
+			if err != nil {
+				h.logger.Error().Err(err).
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("ACL check failed in DELETE calendar")
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if !eff.CanDelete() {
+				h.logger.Debug().
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("insufficient permissions for DELETE calendar")
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
 		}
 
 		if err := h.store.DeleteCalendar(owner, calURI); err != nil {
+			h.logger.Error().Err(err).
+				Str("owner", owner).
+				Str("calendar", calURI).
+				Msg("failed to delete calendar")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -219,35 +299,69 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 	if !common.SafeSegment(calURI) || !common.SafeSegment(uid) {
+		h.logger.Error().
+			Str("calendar", calURI).
+			Str("uid", uid).
+			Msg("unsafe path segments in DELETE object")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in DELETE")
 		http.NotFound(w, r)
 		return
 	}
 
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-		if err != nil || !eff.CanDelete() {
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in DELETE object")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !eff.CanDelete() {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("insufficient permissions for DELETE object")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("failed to delete object")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	_, _, _ = h.store.RecordChange(r.Context(), calendarID, uid, true)
+	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, true)
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("RecordChange failed for DELETE")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
 	cals, err := h.store.ListCalendarsByOwnerUser(ctx, owner)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", uri).
+			Msg("failed to check if calendar exists")
 		return false
 	}
 	for _, c := range cals {
@@ -265,17 +379,24 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
 			owner, calURI, rest = o2, c2, nil
 		} else {
+			h.logger.Error().Str("path", r.URL.Path).Msg("MKCOL with invalid path")
 			http.Error(w, "bad path", http.StatusBadRequest)
 			return
 		}
 	}
 
 	if !common.SafeCollectionName(calURI) {
+		h.logger.Error().Str("calendar", calURI).Msg("unsafe collection name in MKCOL")
 		http.Error(w, "bad collection name", http.StatusBadRequest)
 		return
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read MKCOL body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 
 	type mkcolProp struct {
@@ -296,16 +417,23 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(body) > 0 {
-		_ = xml.Unmarshal(body, &mkcolReq)
+		if err := xml.Unmarshal(body, &mkcolReq); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal MKCOL XML")
+		}
 	}
 
 	isCalendar := mkcolReq.Set != nil && mkcolReq.Set.Prop.ResourceType.Calendar != nil
 	if !isCalendar {
+		h.logger.Error().Msg("MKCOL with unsupported collection type")
 		http.Error(w, "unsupported collection type", http.StatusUnsupportedMediaType)
 		return
 	}
 
 	if h.calendarExists(r.Context(), owner, calURI) {
+		h.logger.Debug().
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("calendar already exists in MKCOL")
 		http.Error(w, "conflict", http.StatusConflict)
 		return
 	}
@@ -344,7 +472,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if color != "" && !common.IsValidHexColor(color) {
-		color = "#3174ad" // Fall back to default
+		color = "#3174ad"
 	}
 
 	newCal := storage.Calendar{
@@ -355,6 +483,10 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		Color:       color,
 	}
 	if err := h.store.CreateCalendar(newCal, "", description); err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to create calendar in MKCOL")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -369,27 +501,42 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
 			owner, calURI, rest = o2, c2, nil
 		} else {
+			h.logger.Error().Str("path", r.URL.Path).Msg("MKCALENDAR with invalid path")
 			http.Error(w, "bad path", http.StatusBadRequest)
 			return
 		}
 	}
 
 	if pr.UserID != owner {
+		h.logger.Debug().
+			Str("user", pr.UserID).
+			Str("owner", owner).
+			Msg("forbidden MKCALENDAR - user mismatch")
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	if !common.SafeCollectionName(calURI) {
+		h.logger.Error().Str("calendar", calURI).Msg("unsafe collection name in MKCALENDAR")
 		http.Error(w, "bad collection name", http.StatusBadRequest)
 		return
 	}
 
 	if h.calendarExists(r.Context(), owner, calURI) {
+		h.logger.Debug().
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("calendar already exists in MKCALENDAR")
 		http.Error(w, "conflict", http.StatusConflict)
 		return
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read MKCALENDAR body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 
 	type mkcalProp struct {
@@ -411,7 +558,9 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	var color string
 
 	if len(body) > 0 {
-		if err := xml.Unmarshal(body, &mkcalReq); err == nil {
+		if err := xml.Unmarshal(body, &mkcalReq); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal MKCALENDAR XML")
+		} else {
 			if mkcalReq.Set != nil {
 				if mkcalReq.Set.Prop.DisplayName != nil {
 					displayName = *mkcalReq.Set.Prop.DisplayName
@@ -444,7 +593,7 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if color != "" && !common.IsValidHexColor(color) {
-		color = "#3174ad" // Fall back to default
+		color = "#3174ad"
 	}
 
 	newCal := storage.Calendar{
@@ -455,6 +604,10 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 		Color:       color,
 	}
 	if err := h.store.CreateCalendar(newCal, "", description); err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to create calendar in MKCALENDAR")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -465,11 +618,13 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
+		h.logger.Error().Str("path", r.URL.Path).Msg("PROPPATCH with invalid path")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 
 	if !common.SafeSegment(calURI) {
+		h.logger.Error().Str("calendar", calURI).Msg("unsafe path in PROPPATCH")
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -477,13 +632,30 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	pr := common.MustPrincipal(r.Context())
 	if pr.UserID != owner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-		if err != nil || !eff.CanEdit() {
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in PROPPATCH")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !eff.CanEdit() {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("insufficient permissions for PROPPATCH")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read PROPPATCH body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 
 	type setRemoveProp struct {
@@ -502,6 +674,7 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 
 	okXML := true
 	if err := xml.Unmarshal(body, &req); err != nil {
+		h.logger.Error().Err(err).Msg("failed to unmarshal PROPPATCH XML")
 		okXML = false
 	}
 
@@ -545,7 +718,7 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 
 	if okXML && req.Remove != nil {
 		if req.Remove.Prop.DisplayName != nil {
-			newName = nil // Remove display name (set to empty)
+			newName = nil
 		}
 
 		for _, rawProp := range req.Remove.Prop.Raw {
@@ -561,7 +734,7 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 			if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
 				if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
 					colorProp.XMLName.Local == "calendar-color" {
-					newColor = "#3174ad" // Reset to default color
+					newColor = "#3174ad"
 					hasColorUpdate = true
 					break
 				}
@@ -598,34 +771,48 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 		if newName != nil {
 			propValue = *newName
 		}
-		_ = resp.EncodeProp(displayNameStatus, common.DisplayName{Name: propValue})
+		if err := resp.EncodeProp(displayNameStatus, common.DisplayName{Name: propValue}); err != nil {
+			h.logger.Error().Err(err).Msg("failed to encode DisplayName property in PROPPATCH")
+		}
 	}
 
 	if hasColorUpdate {
 		if colorStatus == http.StatusOK {
-			_ = resp.EncodeProp(colorStatus, struct {
+			if err := resp.EncodeProp(colorStatus, struct {
 				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
 				Text    string   `xml:",chardata"`
-			}{Text: newColor})
+			}{Text: newColor}); err != nil {
+				h.logger.Error().Err(err).Msg("failed to encode calendar-color property in PROPPATCH")
+			}
 		} else {
-			_ = resp.EncodeProp(colorStatus, struct {
+			if err := resp.EncodeProp(colorStatus, struct {
 				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
-			}{})
+			}{}); err != nil {
+				h.logger.Error().Err(err).Msg("failed to encode calendar-color error in PROPPATCH")
+			}
 		}
 	}
 
 	ms := common.MultiStatus{Responses: []common.Response{resp}}
-	_ = common.ServeMultiStatus(w, &ms)
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for PROPPATCH")
+	}
 }
 
 func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to read REPORT body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	_ = r.Body.Close()
 
 	root := struct {
 		XMLName xml.Name
 	}{}
 	if err := xml.Unmarshal(body, &root); err != nil {
+		h.logger.Error().Err(err).Msg("failed to unmarshal REPORT XML")
 		http.Error(w, "bad xml", http.StatusBadRequest)
 		return
 	}
@@ -633,21 +820,33 @@ func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
 	switch root.XMLName.Space + " " + root.XMLName.Local {
 	case common.NSCalDAV + " calendar-query":
 		var q common.CalendarQuery
-		_ = xml.Unmarshal(body, &q)
+		if err := xml.Unmarshal(body, &q); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal calendar-query")
+		}
 		h.ReportCalendarQuery(w, r, q)
 	case common.NSCalDAV + " calendar-multiget":
 		var mg common.CalendarMultiget
-		_ = xml.Unmarshal(body, &mg)
+		if err := xml.Unmarshal(body, &mg); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal calendar-multiget")
+		}
 		h.ReportCalendarMultiget(w, r, mg)
 	case common.NSDAV + " sync-collection":
 		var sc common.SyncCollection
-		_ = xml.Unmarshal(body, &sc)
+		if err := xml.Unmarshal(body, &sc); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal sync-collection")
+		}
 		h.ReportSyncCollection(w, r, sc)
 	case common.NSCalDAV + " free-busy-query":
 		var fb common.FreeBusyQuery
-		_ = xml.Unmarshal(body, &fb)
+		if err := xml.Unmarshal(body, &fb); err != nil {
+			h.logger.Error().Err(err).Msg("failed to unmarshal free-busy-query")
+		}
 		h.ReportFreeBusyQuery(w, r, fb)
 	default:
+		h.logger.Error().
+			Str("namespace", root.XMLName.Space).
+			Str("local", root.XMLName.Local).
+			Msg("unsupported REPORT type")
 		http.Error(w, "unsupported REPORT", http.StatusBadRequest)
 	}
 }

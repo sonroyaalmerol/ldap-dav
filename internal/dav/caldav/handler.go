@@ -27,6 +27,7 @@ type Handlers struct {
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, logger zerolog.Logger) *Handlers {
 	tz, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
+		logger.Error().Err(err).Str("timezone", cfg.Timezone).Msg("failed to load timezone, using UTC")
 		tz = time.UTC
 	}
 
@@ -40,13 +41,26 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 	}
 }
 
-// mustCanRead enforces read ACL and writes 403 if denied.
 func (h *Handlers) mustCanRead(w http.ResponseWriter, ctx context.Context, pr *auth.Principal, calURI, calOwner string) bool {
 	if pr.UserID == calOwner {
 		return true
 	}
 	eff, err := h.aclProv.Effective(ctx, &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-	if err != nil || !eff.CanRead() {
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("user", pr.UserID).
+			Str("calendar", calURI).
+			Str("owner", calOwner).
+			Msg("ACL check failed")
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	if !eff.CanRead() {
+		h.logger.Debug().
+			Str("user", pr.UserID).
+			Str("calendar", calURI).
+			Str("owner", calOwner).
+			Msg("ACL read denied")
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return false
 	}
@@ -56,6 +70,10 @@ func (h *Handlers) mustCanRead(w http.ResponseWriter, ctx context.Context, pr *a
 func (h *Handlers) loadCalendarByOwnerURI(ctx context.Context, ownerUID, calURI string) (*storage.Calendar, error) {
 	cals, err := h.store.ListCalendarsByOwnerUser(ctx, ownerUID)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", ownerUID).
+			Str("calendar", calURI).
+			Msg("failed to list calendars by owner")
 		return nil, err
 	}
 	for _, c := range cals {
@@ -66,25 +84,28 @@ func (h *Handlers) loadCalendarByOwnerURI(ctx context.Context, ownerUID, calURI 
 	return nil, errors.New("not found")
 }
 
-// resolveCalendar resolves a path which might be an owned calendar or a shared synthetic mount.
-// Returns calendarID and canonical owner UID.
 func (h *Handlers) resolveCalendar(ctx context.Context, owner, calURI string) (string, string, error) {
-	// Owned calendar?
 	if calURI != "" && calURI != "shared" {
 		if cal, err := h.loadCalendarByOwnerURI(ctx, owner, calURI); err == nil && cal != nil {
 			return cal.ID, owner, nil
 		}
-		// If shared mount: look up any calendar with this URI in store, as shared reference.
 		if cal, err := h.findCalendarByURI(ctx, calURI); err == nil && cal != nil {
 			return cal.ID, cal.OwnerUserID, nil
 		}
 	}
+	h.logger.Debug().
+		Str("owner", owner).
+		Str("calendar", calURI).
+		Msg("calendar not found in resolveCalendar")
 	return "", "", errors.New("calendar not found")
 }
 
 func (h *Handlers) findCalendarByURI(ctx context.Context, uri string) (*storage.Calendar, error) {
 	all, err := h.store.ListAllCalendars(ctx)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendar", uri).
+			Msg("failed to list all calendars")
 		return nil, err
 	}
 	for _, c := range all {
@@ -101,6 +122,11 @@ func (h *Handlers) aclCheckRead(ctx context.Context, pr *auth.Principal, calURI,
 	}
 	eff, err := h.aclProv.Effective(ctx, &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("user", pr.UserID).
+			Str("calendar", calURI).
+			Str("owner", calOwner).
+			Msg("ACL effective check failed")
 		return false, err
 	}
 	return eff.CanRead(), nil
