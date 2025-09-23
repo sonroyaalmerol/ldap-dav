@@ -224,15 +224,16 @@ func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
 }
 
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
+	pr := common.MustPrincipal(r.Context())
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
-	pr := common.MustPrincipal(r.Context())
-	if pr.UserID != owner {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+		// Fallback: allow /calendars/{calURI} as shorthand for current user
+		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
+			owner, calURI, rest = o2, c2, nil
+		} else {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
 	}
 
 	if !common.SafeCollectionName(calURI) {
@@ -300,12 +301,18 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
+	pr := common.MustPrincipal(r.Context())
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
+		// Fallback: allow /calendars/{calURI} as shorthand for current user
+		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
+			owner, calURI, rest = o2, c2, nil
+		} else {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
 	}
-	pr := common.MustPrincipal(r.Context())
+
 	if pr.UserID != owner {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
