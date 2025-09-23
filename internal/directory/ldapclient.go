@@ -211,12 +211,16 @@ func privilegesFromList(calID string, privs []string) GroupACL {
 		m[strings.ToLower(strings.TrimSpace(p))] = true
 	}
 	return GroupACL{
-		CalendarID:   calID,
-		Read:         m["read"],
-		WriteProps:   m["edit"] || m["writeprops"] || m["write-properties"],
-		WriteContent: m["write"] || m["writecontent"] || m["write-content"],
-		Bind:         m["create"] || m["bind"],
-		Unbind:       m["delete"] || m["unbind"],
+		CalendarID:                  calID,
+		Read:                        m["read"],
+		WriteProps:                  m["edit"] || m["writeprops"] || m["write-properties"],
+		WriteContent:                m["write"] || m["writecontent"] || m["write-content"],
+		Bind:                        m["create"] || m["bind"],
+		Unbind:                      m["delete"] || m["unbind"],
+		Unlock:                      m["unlock"],
+		ReadACL:                     m["readacl"] || m["read-acl"],
+		ReadCurrentUserPrivilegeSet: m["readprivs"] || m["read-current-user-privilege-set"] || m["read-privileges"],
+		WriteACL:                    m["writeacl"] || m["write-acl"],
 	}
 }
 
@@ -246,6 +250,14 @@ func parseBindingLine(s string) GroupACL {
 					acl.Bind = true
 				case "unbind", "delete":
 					acl.Unbind = true
+				case "unlock":
+					acl.Unlock = true
+				case "readacl", "read-acl":
+					acl.ReadACL = true
+				case "readprivs", "read-current-user-privilege-set", "read-privileges":
+					acl.ReadCurrentUserPrivilegeSet = true
+				case "writeacl", "write-acl":
+					acl.WriteACL = true
 				}
 			}
 		}

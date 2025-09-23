@@ -12,14 +12,45 @@ const (
 )
 
 type Effective struct {
-	Read         bool
-	WriteProps   bool
-	WriteContent bool
-	Bind         bool
-	Unbind       bool
+	Read                        bool
+	WriteProps                  bool
+	WriteContent                bool
+	Bind                        bool
+	Unbind                      bool
+	Unlock                      bool
+	ReadACL                     bool
+	ReadCurrentUserPrivilegeSet bool
+	WriteACL                    bool
 }
 
-func (e Effective) CanRead() bool   { return e.Read }
-func (e Effective) CanEdit() bool   { return e.WriteProps || e.WriteContent }
-func (e Effective) CanCreate() bool { return e.Bind }
-func (e Effective) CanDelete() bool { return e.Unbind }
+func (e Effective) CanRead() bool {
+	return e.Read
+}
+
+func (e Effective) CanEdit() bool {
+	return e.WriteProps || e.WriteContent
+}
+
+func (e Effective) CanCreate() bool {
+	return e.Bind
+}
+
+func (e Effective) CanDelete() bool {
+	return e.Unbind
+}
+
+func (e Effective) CanUnlock() bool {
+	return e.Unlock
+}
+
+func (e Effective) CanReadACL() bool {
+	return e.ReadACL
+}
+
+func (e Effective) CanReadCurrentUserPrivilegeSet() bool {
+	return e.ReadCurrentUserPrivilegeSet
+}
+
+func (e Effective) CanWriteACL() bool {
+	return e.WriteACL
+}

@@ -8,13 +8,16 @@ type User struct {
 }
 
 type GroupACL struct {
-	CalendarID string
-	// privilege bits
-	Read         bool
-	WriteProps   bool // edit
-	WriteContent bool // event body write
-	Bind         bool // create
-	Unbind       bool // delete
+	CalendarID                  string
+	Read                        bool
+	WriteProps                  bool
+	WriteContent                bool
+	Bind                        bool
+	Unbind                      bool
+	Unlock                      bool
+	ReadACL                     bool
+	ReadCurrentUserPrivilegeSet bool
+	WriteACL                    bool
 }
 
 type Group struct {

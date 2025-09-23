@@ -52,10 +52,28 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	pr := common.MustPrincipal(r.Context())
-	if ok := h.mustCanRead(w, r.Context(), pr, calURI, calOwner); !ok {
-		return
+	if pr.UserID != calOwner {
+		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in GET")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !eff.Read {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("insufficient DAV:read privileges for GET")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
+
 	obj, err := h.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -113,14 +131,10 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.logger.Debug().
-		Str("owner", owner).
-		Str("calURI", calURI).
-		Str("calendarID", calendarID).
-		Str("calOwner", calOwner).
-		Msg("resolved calendar for PUT")
 
 	pr := common.MustPrincipal(r.Context())
+
+	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
 
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
@@ -132,13 +146,25 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if !(eff.CanCreate() || eff.CanEdit()) {
-			h.logger.Debug().
-				Str("user", pr.UserID).
-				Str("calendar", calURI).
-				Msg("insufficient permissions for PUT")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
+
+		if existing == nil {
+			if !eff.Bind {
+				h.logger.Debug().
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("insufficient DAV:bind privileges for creating new resource")
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		} else {
+			if !eff.WriteContent {
+				h.logger.Debug().
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("insufficient DAV:write-content privileges for modifying existing resource")
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
 		}
 	}
 
@@ -186,7 +212,6 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	wantNew := r.Header.Get("If-None-Match") == "*"
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 
-	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
 	if wantNew && existing != nil {
 		h.logger.Debug().Str("uid", uid).Msg("precondition failed - object exists")
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
@@ -260,11 +285,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if pr.UserID != owner {
-			eff, err := h.aclProv.Effective(
-				r.Context(),
-				&directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display},
-				calURI,
-			)
+			eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 			if err != nil {
 				h.logger.Error().Err(err).
 					Str("user", pr.UserID).
@@ -273,11 +294,11 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			if !eff.CanDelete() {
+			if !eff.Unbind {
 				h.logger.Debug().
 					Str("user", pr.UserID).
 					Str("calendar", calURI).
-					Msg("insufficient permissions for DELETE calendar")
+					Msg("insufficient DAV:unbind privileges for DELETE calendar")
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
@@ -327,15 +348,16 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if !eff.CanDelete() {
+		if !eff.WriteContent {
 			h.logger.Debug().
 				Str("user", pr.UserID).
 				Str("calendar", calURI).
-				Msg("insufficient permissions for DELETE object")
+				Msg("insufficient DAV:write-content privileges for DELETE object")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
+
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
 		h.logger.Error().Err(err).
@@ -389,6 +411,26 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error().Str("calendar", calURI).Msg("unsafe collection name in MKCOL")
 		http.Error(w, "bad collection name", http.StatusBadRequest)
 		return
+	}
+
+	if pr.UserID != owner {
+		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, "")
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("owner", owner).
+				Msg("ACL check failed in MKCOL")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !eff.Bind {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("owner", owner).
+				Msg("insufficient DAV:bind privileges for MKCOL")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -508,12 +550,23 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if pr.UserID != owner {
-		h.logger.Debug().
-			Str("user", pr.UserID).
-			Str("owner", owner).
-			Msg("forbidden MKCALENDAR - user mismatch")
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, "")
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("owner", owner).
+				Msg("ACL check failed in MKCALENDAR")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !eff.Bind {
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("owner", owner).
+				Msg("insufficient DAV:bind privileges for MKCALENDAR")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	if !common.SafeCollectionName(calURI) {
@@ -640,11 +693,11 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if !eff.CanEdit() {
+		if !eff.WriteProps {
 			h.logger.Debug().
 				Str("user", pr.UserID).
 				Str("calendar", calURI).
-				Msg("insufficient permissions for PROPPATCH")
+				Msg("insufficient DAV:write-properties privileges for PROPPATCH")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -800,6 +853,41 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
+	pr := common.MustPrincipal(r.Context())
+	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
+
+	if owner != "" && calURI != "" && len(rest) == 0 {
+		_, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("owner", owner).
+				Str("calendar", calURI).
+				Msg("failed to resolve calendar in REPORT")
+			http.NotFound(w, r)
+			return
+		}
+
+		if pr.UserID != calOwner {
+			eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
+			if err != nil {
+				h.logger.Error().Err(err).
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("ACL check failed in REPORT")
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if !eff.Read {
+				h.logger.Debug().
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("insufficient DAV:read privileges for REPORT")
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		h.logger.Error().Err(err).Msg("failed to read REPORT body")

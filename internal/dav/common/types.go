@@ -202,12 +202,18 @@ type Grant struct {
 }
 
 type Priv struct {
-	XMLName      xml.Name  `xml:"DAV: privilege"`
-	Read         *struct{} `xml:"DAV: read,omitempty"`
-	WriteProps   *struct{} `xml:"DAV: write-properties,omitempty"`
-	WriteContent *struct{} `xml:"DAV: write-content,omitempty"`
-	Bind         *struct{} `xml:"DAV: bind,omitempty"`
-	Unbind       *struct{} `xml:"DAV: unbind,omitempty"`
+	XMLName                     xml.Name  `xml:"DAV: privilege"`
+	Read                        *struct{} `xml:"DAV: read,omitempty"`
+	WriteProps                  *struct{} `xml:"DAV: write-properties,omitempty"`
+	WriteContent                *struct{} `xml:"DAV: write-content,omitempty"`
+	Bind                        *struct{} `xml:"DAV: bind,omitempty"`
+	Unbind                      *struct{} `xml:"DAV: unbind,omitempty"`
+	Write                       *struct{} `xml:"DAV: write,omitempty"`
+	Unlock                      *struct{} `xml:"DAV: unlock,omitempty"`
+	ReadACL                     *struct{} `xml:"DAV: read-acl,omitempty"`
+	ReadCurrentUserPrivilegeSet *struct{} `xml:"DAV: read-current-user-privilege-set,omitempty"`
+	WriteACL                    *struct{} `xml:"DAV: write-acl,omitempty"`
+	All                         *struct{} `xml:"DAV: all,omitempty"`
 }
 
 type CalendarHomeSet struct {

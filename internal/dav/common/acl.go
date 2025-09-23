@@ -15,41 +15,73 @@ func BuildReadOnlyACL(r *http.Request, basePath, calURI, ownerUID string, aclPro
 	}
 
 	isOwner := pr.UserID == ownerUID
-	var eff struct{ Read, WP, WC, B, U bool }
+	var eff acl.Effective
+
 	if isOwner {
-		eff = struct{ Read, WP, WC, B, U bool }{true, true, true, true, true}
+		eff = acl.Effective{
+			Read:                        true,
+			WriteProps:                  true,
+			WriteContent:                true,
+			Bind:                        true,
+			Unbind:                      true,
+			Unlock:                      true,
+			ReadACL:                     true,
+			ReadCurrentUserPrivilegeSet: true,
+			WriteACL:                    false,
+		}
 	} else {
 		e, err := aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
 		if err != nil {
 			return nil
 		}
-		eff = struct{ Read, WP, WC, B, U bool }{e.CanRead(), e.WriteProps, e.WriteContent, e.Bind, e.Unbind}
+		eff = e
 	}
-	g := Grant{}
+
+	var privs []Priv
 	p := Priv{}
+
 	if eff.Read {
 		p.Read = &struct{}{}
 	}
-	if eff.WP {
+	if eff.WriteProps && eff.WriteContent {
+		p.Write = &struct{}{}
+	}
+	if eff.WriteProps {
 		p.WriteProps = &struct{}{}
 	}
-	if eff.WC {
+	if eff.WriteContent {
 		p.WriteContent = &struct{}{}
 	}
-	if eff.B {
+	if eff.Bind {
 		p.Bind = &struct{}{}
 	}
-	if eff.U {
+	if eff.Unbind {
 		p.Unbind = &struct{}{}
 	}
-	if p.Read != nil || p.WriteProps != nil || p.WriteContent != nil || p.Bind != nil || p.Unbind != nil {
-		g.Privs = append(g.Privs, p)
+	if eff.Unlock {
+		p.Unlock = &struct{}{}
 	}
+	if eff.ReadACL {
+		p.ReadACL = &struct{}{}
+	}
+	if eff.ReadCurrentUserPrivilegeSet {
+		p.ReadCurrentUserPrivilegeSet = &struct{}{}
+	}
+	if eff.WriteACL {
+		p.WriteACL = &struct{}{}
+	}
+
+	if p.Read != nil || p.WriteProps != nil || p.WriteContent != nil || p.Bind != nil ||
+		p.Unbind != nil || p.Unlock != nil || p.ReadACL != nil ||
+		p.ReadCurrentUserPrivilegeSet != nil || p.WriteACL != nil {
+		privs = append(privs, p)
+	}
+
 	return &AclProp{
 		ACE: []Ace{
 			{
 				Principal: Href{Value: PrincipalURL(basePath, pr.UserID)},
-				Grant:     g,
+				Grant:     Grant{Privs: privs},
 			},
 		},
 	}
