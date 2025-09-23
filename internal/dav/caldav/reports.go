@@ -167,8 +167,15 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 
 	var resps []common.Response
 
+	// Build HREFs relative to the REPORT target collection path.
+	// r.URL.Path is like: <basePath>/calendars/<owner>/<calURI...>/
+	baseHref := r.URL.Path
+	if !strings.HasSuffix(baseHref, "/") {
+		baseHref += "/"
+	}
+
 	for _, ch := range changes {
-		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, ch.UID+".ics")
+		hrefStr := baseHref + ch.UID + ".ics"
 		if ch.Deleted {
 			resp := common.Response{
 				Hrefs: []common.Href{{Value: hrefStr}},
