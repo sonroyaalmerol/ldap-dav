@@ -23,6 +23,7 @@ func (s *Store) GetCalendarByID(ctx context.Context, id string) (*storage.Calend
 		URI:         meta.URI,
 		DisplayName: meta.DisplayName,
 		Description: meta.Description,
+		Color:       meta.Color,
 		CTag:        meta.CTag,
 		CreatedAt:   meta.CreatedAt,
 		UpdatedAt:   meta.UpdatedAt,
@@ -111,10 +112,48 @@ func (s *Store) ListAllCalendars(ctx context.Context) ([]*storage.Calendar, erro
 			URI:         meta.URI,
 			DisplayName: meta.DisplayName,
 			Description: meta.Description,
+			Color:       meta.Color,
 			CTag:        meta.CTag,
 			CreatedAt:   meta.CreatedAt,
 			UpdatedAt:   meta.UpdatedAt,
 		})
 	}
 	return out, nil
+}
+
+func (s *Store) UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color string) error {
+	base := filepath.Join(s.root, "calendars")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return err
+	}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		id := ent.Name()
+		metaPath := s.calMetaPath(id)
+		var meta calMeta
+		if err := readJSON(metaPath, &meta); err != nil {
+			continue
+		}
+		if meta.OwnerUserID == ownerUID && meta.URI == calURI {
+			// ensure directory exists (optional)
+			dir := s.calDir(id)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			return s.withCalLock(id, func() error {
+				// reload to avoid TOCTOU
+				if err := readJSON(metaPath, &meta); err != nil {
+					return err
+				}
+				meta.Color = color
+				meta.UpdatedAt = time.Now().UTC()
+				meta.CTag = randID()
+				return writeJSON(metaPath, &meta)
+			})
+		}
+	}
+	return fs.ErrNotExist
 }

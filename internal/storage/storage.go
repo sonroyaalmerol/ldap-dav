@@ -12,6 +12,7 @@ type Calendar struct {
 	URI         string
 	DisplayName string
 	Description string
+	Color       string
 	CTag        string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -44,6 +45,8 @@ type Store interface {
 	UpdateCalendarDisplayName(ctx context.Context, ownerUID, calURI string, displayName *string) error
 	ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*Calendar, error)
 	ListAllCalendars(ctx context.Context) ([]*Calendar, error)
+	UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color string) error
+
 	// Objects
 	GetObject(ctx context.Context, calendarID, uid string) (*Object, error)
 	PutObject(ctx context.Context, obj *Object) error

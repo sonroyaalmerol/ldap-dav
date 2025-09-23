@@ -19,6 +19,12 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 		return err
 	}
 	now := time.Now().UTC()
+
+	color := c.Color
+	if color == "" {
+		color = "#3174ad" // Default blue color
+	}
+
 	meta := calMeta{
 		ID:          id,
 		OwnerUserID: c.OwnerUserID,
@@ -26,6 +32,7 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 		URI:         c.URI,
 		DisplayName: c.DisplayName,
 		Description: description,
+		Color:       color,
 		CTag:        randID(),
 		CreatedAt:   now,
 		UpdatedAt:   now,

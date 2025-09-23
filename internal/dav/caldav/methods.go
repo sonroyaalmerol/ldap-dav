@@ -262,7 +262,6 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	pr := common.MustPrincipal(r.Context())
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
-		// Fallback: allow /calendars/{calURI} as shorthand for current user
 		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
 			owner, calURI, rest = o2, c2, nil
 		} else {
@@ -286,6 +285,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		ResourceType struct {
 			Calendar *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar"`
 		} `xml:"DAV: resourcetype"`
+		Raw []common.RawXMLValue `xml:",any"`
 	}
 	var mkcolReq struct {
 		XMLName xml.Name `xml:"DAV: mkcol"`
@@ -312,6 +312,8 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 
 	var displayName string
 	var description string
+	var color string
+
 	if mkcolReq.Set != nil {
 		if mkcolReq.Set.Prop.DisplayName != nil {
 			displayName = *mkcolReq.Set.Prop.DisplayName
@@ -319,6 +321,30 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		if mkcolReq.Set.Prop.Description != nil {
 			description = *mkcolReq.Set.Prop.Description
 		}
+
+		for _, rawProp := range mkcolReq.Set.Prop.Raw {
+			var colorProp struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+				Text    string   `xml:",chardata"`
+			}
+
+			xmlBytes, err := xml.Marshal(&rawProp)
+			if err != nil {
+				continue
+			}
+
+			if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
+				if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
+					colorProp.XMLName.Local == "calendar-color" {
+					color = colorProp.Text
+					break
+				}
+			}
+		}
+	}
+
+	if color != "" && !common.IsValidHexColor(color) {
+		color = "#3174ad" // Fall back to default
 	}
 
 	newCal := storage.Calendar{
@@ -326,6 +352,7 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 		URI:         calURI,
 		DisplayName: displayName,
 		Description: description,
+		Color:       color,
 	}
 	if err := h.store.CreateCalendar(newCal, "", description); err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -339,7 +366,6 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	pr := common.MustPrincipal(r.Context())
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || calURI == "" || len(rest) != 0 {
-		// Fallback: allow /calendars/{calURI} as shorthand for current user
 		if o2, c2, ok := tryCalendarShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
 			owner, calURI, rest = o2, c2, nil
 		} else {
@@ -367,9 +393,10 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	_ = r.Body.Close()
 
 	type mkcalProp struct {
-		XMLName             xml.Name `xml:"DAV: prop"`
-		DisplayName         *string  `xml:"DAV: displayname"`
-		CalendarDescription *string  `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+		XMLName             xml.Name             `xml:"DAV: prop"`
+		DisplayName         *string              `xml:"DAV: displayname"`
+		CalendarDescription *string              `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
+		Raw                 []common.RawXMLValue `xml:",any"`
 	}
 	var mkcalReq struct {
 		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav mkcalendar"`
@@ -381,6 +408,7 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 
 	var displayName string
 	var description string
+	var color string
 
 	if len(body) > 0 {
 		if err := xml.Unmarshal(body, &mkcalReq); err == nil {
@@ -391,8 +419,32 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 				if mkcalReq.Set.Prop.CalendarDescription != nil {
 					description = *mkcalReq.Set.Prop.CalendarDescription
 				}
+
+				for _, rawProp := range mkcalReq.Set.Prop.Raw {
+					var colorProp struct {
+						XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+						Text    string   `xml:",chardata"`
+					}
+
+					xmlBytes, err := xml.Marshal(&rawProp)
+					if err != nil {
+						continue
+					}
+
+					if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
+						if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
+							colorProp.XMLName.Local == "calendar-color" {
+							color = colorProp.Text
+							break
+						}
+					}
+				}
 			}
 		}
+	}
+
+	if color != "" && !common.IsValidHexColor(color) {
+		color = "#3174ad" // Fall back to default
 	}
 
 	newCal := storage.Calendar{
@@ -400,6 +452,7 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 		URI:         calURI,
 		DisplayName: displayName,
 		Description: description,
+		Color:       color,
 	}
 	if err := h.store.CreateCalendar(newCal, "", description); err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -432,40 +485,135 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	_ = r.Body.Close()
+
+	type setRemoveProp struct {
+		DisplayName *string              `xml:"DAV: displayname"`
+		Raw         []common.RawXMLValue `xml:",any"`
+	}
 	type setRemove struct {
 		XMLName xml.Name
-		Prop    struct {
-			DisplayName *string `xml:"DAV: displayname"`
-		} `xml:"DAV: prop"`
+		Prop    setRemoveProp `xml:"DAV: prop"`
 	}
 	var req struct {
 		XMLName xml.Name   `xml:"DAV: propertyupdate"`
 		Set     *setRemove `xml:"DAV: set"`
 		Remove  *setRemove `xml:"DAV: remove"`
 	}
+
 	okXML := true
 	if err := xml.Unmarshal(body, &req); err != nil {
 		okXML = false
 	}
+
 	var newName *string
-	if okXML && req.Set != nil && req.Set.Prop.DisplayName != nil {
-		newName = req.Set.Prop.DisplayName
+	var newColor string
+	hasColorUpdate := false
+	var colorStatus int = http.StatusOK
+
+	extractColorFromRaw := func(raw []common.RawXMLValue) string {
+		for _, rawProp := range raw {
+			var colorProp struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+				Text    string   `xml:",chardata"`
+			}
+
+			xmlBytes, err := xml.Marshal(&rawProp)
+			if err != nil {
+				continue
+			}
+
+			if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
+				if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
+					colorProp.XMLName.Local == "calendar-color" {
+					return colorProp.Text
+				}
+			}
+		}
+		return ""
 	}
-	if okXML && req.Remove != nil && req.Remove.Prop.DisplayName != nil {
-		newName = nil
+
+	if okXML && req.Set != nil {
+		if req.Set.Prop.DisplayName != nil {
+			newName = req.Set.Prop.DisplayName
+		}
+
+		if color := extractColorFromRaw(req.Set.Prop.Raw); color != "" {
+			newColor = color
+			hasColorUpdate = true
+		}
 	}
-	if newName != nil || (okXML && req.Remove != nil) {
-		_ = h.store.UpdateCalendarDisplayName(r.Context(), owner, calURI, newName)
+
+	if okXML && req.Remove != nil {
+		if req.Remove.Prop.DisplayName != nil {
+			newName = nil // Remove display name (set to empty)
+		}
+
+		for _, rawProp := range req.Remove.Prop.Raw {
+			xmlBytes, err := xml.Marshal(&rawProp)
+			if err != nil {
+				continue
+			}
+
+			var colorProp struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+			}
+
+			if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
+				if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
+					colorProp.XMLName.Local == "calendar-color" {
+					newColor = "#3174ad" // Reset to default color
+					hasColorUpdate = true
+					break
+				}
+			}
+		}
+	}
+
+	var displayNameStatus int = http.StatusOK
+
+	if newName != nil || (okXML && req.Remove != nil && req.Remove.Prop.DisplayName != nil) {
+		if err := h.store.UpdateCalendarDisplayName(r.Context(), owner, calURI, newName); err != nil {
+			h.logger.Error().Err(err).Msg("Failed to update calendar display name")
+			displayNameStatus = http.StatusInternalServerError
+		}
+	}
+
+	if hasColorUpdate {
+		if !common.IsValidHexColor(newColor) {
+			colorStatus = http.StatusBadRequest
+		} else {
+			if err := h.store.UpdateCalendarColor(r.Context(), owner, calURI, newColor); err != nil {
+				h.logger.Error().Err(err).Msg("Failed to update calendar color")
+				colorStatus = http.StatusInternalServerError
+			}
+		}
 	}
 
 	resp := common.Response{
 		Hrefs: []common.Href{{Value: r.URL.Path}},
 	}
-	if newName != nil {
-		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: *newName})
-	} else {
-		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: ""})
+
+	if newName != nil || (okXML && req.Remove != nil && req.Remove.Prop.DisplayName != nil) {
+		propValue := ""
+		if newName != nil {
+			propValue = *newName
+		}
+		_ = resp.EncodeProp(displayNameStatus, common.DisplayName{Name: propValue})
 	}
+
+	if hasColorUpdate {
+		if colorStatus == http.StatusOK {
+			_ = resp.EncodeProp(colorStatus, struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+				Text    string   `xml:",chardata"`
+			}{Text: newColor})
+		} else {
+			_ = resp.EncodeProp(colorStatus, struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+			}{})
+		}
+	}
+
 	ms := common.MultiStatus{Responses: []common.Response{resp}}
 	_ = common.ServeMultiStatus(w, &ms)
 }

@@ -64,6 +64,10 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 			_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
 			_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: cc.DisplayName})
 			_ = resp.EncodeProp(http.StatusOK, struct {
+				XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+				Text    string   `xml:",chardata"`
+			}{Text: cc.Color})
+			_ = resp.EncodeProp(http.StatusOK, struct {
 				XMLName xml.Name `xml:"DAV: owner"`
 				Href    common.Href
 			}{Href: common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
@@ -102,6 +106,10 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 					resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
 					_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Calendar: &struct{}{}})
 					_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: cc.DisplayName})
+					_ = resp.EncodeProp(http.StatusOK, struct {
+						XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+						Text    string   `xml:",chardata"`
+					}{Text: cc.Color})
 					_ = resp.EncodeProp(http.StatusOK, struct {
 						XMLName xml.Name `xml:"DAV: owner"`
 						Href    common.Href
@@ -220,6 +228,10 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-description"`
 		Text    string   `xml:",chardata"`
 	}{Text: cal.Description})
+	_ = propResp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"http://apple.com/ns/ical/ calendar-color"`
+		Text    string   `xml:",chardata"`
+	}{Text: cal.Color})
 	_ = propResp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-timezone"`
 		Text    string   `xml:",chardata"`

@@ -184,3 +184,16 @@ func BuildFreeBusyICS(start, end time.Time, busyIntervals []ical.Interval, prodI
 
 	return []byte(buf.String())
 }
+
+func IsValidHexColor(color string) bool {
+	if len(color) != 7 || color[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		c := color[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
