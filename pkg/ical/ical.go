@@ -3,8 +3,6 @@ package ical
 import (
 	"bytes"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
