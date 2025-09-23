@@ -9,18 +9,18 @@ import (
 
 // Minimal Multi-Status parser sufficient for validations (RFC 4918 §13, RFC 6578 adds sync-token)
 type multiStatus struct {
-	XMLName   xml.Name     `xml:"{DAV:}multistatus"`
-	Responses []msResponse `xml:"{DAV:}response"`
-	SyncToken string       `xml:"{DAV:}sync-token"`
+	XMLName   xml.Name     `xml:"multistatus"`
+	Responses []msResponse `xml:"response"`
+	SyncToken string       `xml:"sync-token"`
 }
 type msResponse struct {
-	Href     string     `xml:"{DAV:}href"`
-	PropStat []propStat `xml:"{DAV:}propstat"`
-	Status   string     `xml:"{DAV:}status"`
+	Href     string     `xml:"href"`
+	PropStat []propStat `xml:"propstat"`
+	Status   string     `xml:"status"`
 }
 type propStat struct {
-	Status  string `xml:"{DAV:}status"`
-	PropRaw anyXML `xml:"{DAV:}prop"`
+	Status  string `xml:"status"`
+	PropRaw anyXML `xml:"prop"`
 	// For simplicity, keep raw inner XML for flexible checks
 	PropXML string `xml:"-"`
 }
