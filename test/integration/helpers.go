@@ -1,10 +1,15 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/xml"
 	"html"
+	"io"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"testing"
 )
 
 // Minimal Multi-Status parser sufficient for validations (RFC 4918 §13, RFC 6578 adds sync-token)
@@ -149,4 +154,151 @@ func xmlEscape(s string) string {
 		`'`, "&apos;",
 	)
 	return repl.Replace(s)
+}
+
+func getETag(t *testing.T, client *http.Client, resourceURL, authz string) string {
+	t.Helper()
+	req, _ := http.NewRequest("HEAD", resourceURL, nil)
+	if authz != "" {
+		req.Header.Set("Authorization", authz)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD for ETag %s: %v", resourceURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD for ETag status at %s: %d", resourceURL, resp.StatusCode)
+	}
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		t.Fatalf("missing ETag on HEAD for %s", resourceURL)
+	}
+	return etag
+}
+
+func currentSyncToken(t *testing.T, client *http.Client, collectionURL, authz string) string {
+	t.Helper()
+	body := `<?xml version="1.0" encoding="utf-8" ?>
+<D:sync-collection xmlns:D="DAV:"><D:sync-token/></D:sync-collection>`
+	req, _ := http.NewRequest("REPORT", collectionURL, bytes.NewBufferString(body))
+	req.Header.Set("Authorization", authz)
+	req.Header.Set("Content-Type", "application/xml")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("sync-collection (get token) %s: %v", collectionURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 207 {
+		t.Fatalf("sync-collection status at %s: %d", collectionURL, resp.StatusCode)
+	}
+	rb, _ := io.ReadAll(resp.Body)
+	ms, err := parseMultiStatus(rb)
+	if err != nil {
+		t.Fatalf("parse sync token multistatus: %v", err)
+	}
+	if ms.SyncToken == "" {
+		t.Fatalf("missing DAV:sync-token for %s", collectionURL)
+	}
+	return ms.SyncToken
+}
+
+func verifyDeletionReflectedInSync(t *testing.T, client *http.Client, collectionURL, authz, prevToken, deletedHref string) {
+	t.Helper()
+	body := `<?xml version="1.0" encoding="utf-8" ?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + xmlEscape(prevToken) + `</D:sync-token>
+  <D:prop><D:getetag/></D:prop>
+</D:sync-collection>`
+	req, _ := http.NewRequest("REPORT", collectionURL, bytes.NewBufferString(body))
+	req.Header.Set("Authorization", authz)
+	req.Header.Set("Content-Type", "application/xml")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("sync-collection after deletion: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 207 {
+		t.Fatalf("sync-collection after deletion status: %d", resp.StatusCode)
+	}
+	rb, _ := io.ReadAll(resp.Body)
+	ms, err := parseMultiStatus(rb)
+	if err != nil {
+		t.Fatalf("parse multistatus after deletion: %v\n%s", err, string(rb))
+	}
+	found := false
+	for _, r := range ms.Responses {
+		if strings.Contains(r.Href, deletedHref) {
+			// deletion is represented either as 404 status on the response or a propstat 404
+			if strings.Contains(strings.ToLower(r.Status), "404") {
+				found = true
+				break
+			}
+			for _, ps := range r.PropStat {
+				if strings.Contains(strings.ToLower(ps.Status), "404") {
+					found = true
+					break
+				}
+			}
+		}
+	}
+	if !found {
+		// fallback: raw body contains href and 404
+		if !(strings.Contains(string(rb), deletedHref) && strings.Contains(string(rb), "404")) {
+			t.Fatalf("deleted resource not reflected in sync-collection changes for %s\n%s", deletedHref, string(rb))
+		}
+	}
+}
+
+func parentCollectionURL(resourceURL string) (string, string) {
+	// returns collectionURL (ending in "/") and href path component for the resource
+	u, err := url.Parse(resourceURL)
+	if err != nil {
+		return "", ""
+	}
+	path := u.Path
+	if strings.HasSuffix(path, "/") {
+		path = strings.TrimSuffix(path, "/")
+	}
+	i := strings.LastIndex(path, "/")
+	if i < 0 {
+		return "", ""
+	}
+	collPath := path[:i+1]
+	href := path
+	u.Path = collPath
+	return u.String(), href
+}
+
+func deleteAndValidate(t *testing.T, client *http.Client, resourceURL, authz string) {
+	t.Helper()
+	collURL, href := parentCollectionURL(resourceURL)
+	if collURL == "" || href == "" {
+		t.Fatalf("cannot derive collection from %s", resourceURL)
+	}
+	prevToken := currentSyncToken(t, client, collURL, authz)
+	etag := getETag(t, client, resourceURL, authz)
+	req, _ := http.NewRequest("DELETE", resourceURL, nil)
+	req.Header.Set("Authorization", authz)
+	req.Header.Set("If-Match", etag)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("delete %s: %v", resourceURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete status at %s: %d body=%s", resourceURL, resp.StatusCode, string(b))
+	}
+	getReq, _ := http.NewRequest("GET", resourceURL, nil)
+	getReq.Header.Set("Authorization", authz)
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		t.Fatalf("get after delete %s: %v", resourceURL, err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", getResp.StatusCode)
+	}
+	verifyDeletionReflectedInSync(t, client, collURL, authz, prevToken, href)
 }

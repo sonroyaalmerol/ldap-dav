@@ -301,6 +301,12 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		}
 	}
 
+	{
+		// cleanup: delete created event and validate
+		resourceURL := baseURL + basePath + "/calendars/alice/shared/team/evt1.ics"
+		deleteAndValidate(t, client, resourceURL, authz)
+	}
+
 	// REPORT calendar-query on shared team
 	{
 		body := `<?xml version="1.0" encoding="utf-8" ?>
@@ -493,6 +499,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if !bytes.Contains(b, []byte("Updated Event")) {
 			t.Fatalf("event not updated: %s", string(b))
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test event deletion
@@ -520,29 +528,7 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		}
 		resp.Body.Close()
 
-		// Delete event
-		req, _ = http.NewRequest("DELETE", url, nil)
-		req.Header.Set("Authorization", authz)
-		resp, err = client.Do(req)
-		if err != nil {
-			t.Fatalf("delete event: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-			t.Fatalf("delete event status: %d", resp.StatusCode)
-		}
-
-		// Verify deletion
-		req, _ = http.NewRequest("GET", url, nil)
-		req.Header.Set("Authorization", authz)
-		resp, err = client.Do(req)
-		if err != nil {
-			t.Fatalf("get deleted event: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("deleted event still exists: %d", resp.StatusCode)
-		}
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test recurring events
@@ -600,6 +586,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != 207 {
 			t.Fatalf("query recurring events status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test VTODO support
@@ -653,6 +641,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != 207 {
 			t.Fatalf("query todos status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test timezone handling
@@ -690,6 +680,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("create timezone event status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 }
 
@@ -1256,6 +1248,22 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 		}
 	})
 
+	t.Run("CleanupQuerySetupEvents", func(t *testing.T) {
+		for _, evt := range []string{"query-evt-1", "query-evt-2", "query-evt-3"} {
+			resourceURL := baseCalendarURL + evt + ".ics"
+			req, _ := http.NewRequest("HEAD", resourceURL, nil)
+			req.Header.Set("Authorization", authz)
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				deleteAndValidate(t, client, resourceURL, authz)
+			}
+		}
+	})
+
 	// Test free/busy queries
 	t.Run("FreeBusyQuery", func(t *testing.T) {
 		body := `<?xml version="1.0" encoding="utf-8" ?>
@@ -1265,6 +1273,12 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 		req, _ := http.NewRequest("REPORT", baseCalendarURL, bytes.NewBufferString(body))
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Content-Type", "application/xml")
+		// Ensure at least one event exists for free-busy
+		seed := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ldap-dav//test//EN\r\nBEGIN:VEVENT\r\nUID:fb-seed\r\nDTSTAMP:20250101T090000Z\r\nDTSTART:20250101T010000Z\r\nDTEND:20250101T020000Z\r\nSUMMARY:FB Seed\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+		putReq, _ := http.NewRequest("PUT", baseCalendarURL+"fb-seed.ics", bytes.NewBufferString(seed))
+		putReq.Header.Set("Authorization", authz)
+		putReq.Header.Set("Content-Type", "text/calendar; charset=utf-8")
+		_, _ = client.Do(putReq)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("free-busy query: %v", err)
@@ -1282,6 +1296,7 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 			if !cal.Valid || !cal.Has("VFREEBUSY") {
 				t.Fatalf("free-busy missing VFREEBUSY:\n%s", string(rb))
 			}
+			deleteAndValidate(t, client, baseCalendarURL+"fb-seed.ics", authz)
 		}
 	})
 }
