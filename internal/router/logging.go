@@ -4,10 +4,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
-
-	"github.com/rs/zerolog"
-	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 type statusRecorder struct {
