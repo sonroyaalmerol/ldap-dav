@@ -202,7 +202,9 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 		l.logger.Error().Err(err).Msg("failed to decode introspection response")
 		return false, "", err
 	}
-	return out.Active, out.Sub, nil
+
+	username := strings.SplitN(out.Sub, "@", 2)[0]
+	return out.Active, username, nil
 }
 
 func privilegesFromList(calID string, privs []string) GroupACL {
