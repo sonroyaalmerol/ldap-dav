@@ -1,6 +1,9 @@
 package common
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 func PrincipalURL(basePath, uid string) string {
 	return JoinURL(basePath, "principals", "users", uid)
@@ -25,4 +28,12 @@ func CalendarPath(basePath, ownerUID, calURI string) string {
 
 func CalendarSharedRoot(basePath, uid string) string {
 	return JoinURL(basePath, "calendars", uid, "shared") + "/"
+}
+
+func CurrentUserPrincipalHref(ctx context.Context, basePath string) string {
+	u, _ := CurrentUser(ctx)
+	if u == nil {
+		return JoinURL(basePath, "principals")
+	}
+	return PrincipalURL(basePath, u.UID)
 }

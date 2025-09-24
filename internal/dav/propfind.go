@@ -96,7 +96,7 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ s
 	if err := resp.EncodeProp(http.StatusOK, common.DisplayName{Name: u.DisplayName}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode DisplayName property")
 	}
-	if err := resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: common.Href{Value: self}}); err != nil {
+	if err := resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: self}}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode CurrentUserPrincipal property")
 	}
 	if err := resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}}); err != nil {
@@ -126,7 +126,7 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request, _ []byte
 		h.logger.Error().Err(err).Msg("failed to encode ResourceType for root")
 	}
 	if err := resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{
-		Href: common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
+		Href: &common.Href{Value: common.CurrentUserPrincipalHref(r.Context(), h.basePath)},
 	}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode CurrentUserPrincipal for root")
 	}

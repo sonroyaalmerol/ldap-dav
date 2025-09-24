@@ -139,8 +139,6 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 		service.HandleMkcalendar(w, req)
 	case "PROPPATCH":
 		service.HandleProppatch(w, req)
-	case "ACL":
-		service.HandleACL(w, req)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

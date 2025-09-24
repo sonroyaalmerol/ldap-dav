@@ -20,14 +20,13 @@ type Effective struct {
 	Unlock                      bool
 	ReadACL                     bool
 	ReadCurrentUserPrivilegeSet bool
-	WriteACL                    bool
 }
 
 func (e Effective) CanRead() bool {
 	return e.Read
 }
 
-func (e Effective) CanEdit() bool {
+func (e Effective) CanWrite() bool {
 	return e.WriteProps || e.WriteContent
 }
 
@@ -48,9 +47,9 @@ func (e Effective) CanReadACL() bool {
 }
 
 func (e Effective) CanReadCurrentUserPrivilegeSet() bool {
-	return e.ReadCurrentUserPrivilegeSet
+	return e.ReadCurrentUserPrivilegeSet || e.Read
 }
 
 func (e Effective) CanWriteACL() bool {
-	return e.WriteACL
+	return false
 }

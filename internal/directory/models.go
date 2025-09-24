@@ -17,7 +17,6 @@ type GroupACL struct {
 	Unlock                      bool
 	ReadACL                     bool
 	ReadCurrentUserPrivilegeSet bool
-	WriteACL                    bool
 }
 
 type Group struct {

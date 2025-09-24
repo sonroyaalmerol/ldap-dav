@@ -220,7 +220,6 @@ func privilegesFromList(calID string, privs []string) GroupACL {
 		Unlock:                      m["unlock"],
 		ReadACL:                     m["readacl"] || m["read-acl"],
 		ReadCurrentUserPrivilegeSet: m["readprivs"] || m["read-current-user-privilege-set"] || m["read-privileges"],
-		WriteACL:                    m["writeacl"] || m["write-acl"],
 	}
 }
 
@@ -256,8 +255,6 @@ func parseBindingLine(s string) GroupACL {
 					acl.ReadACL = true
 				case "readprivs", "read-current-user-privilege-set", "read-privileges":
 					acl.ReadCurrentUserPrivilegeSet = true
-				case "writeacl", "write-acl":
-					acl.WriteACL = true
 				}
 			}
 		}

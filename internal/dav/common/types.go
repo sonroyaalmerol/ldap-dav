@@ -185,35 +185,80 @@ type Comp struct {
 	Name    string   `xml:"name,attr"`
 }
 
-type AclProp struct {
+type ACL struct {
 	XMLName xml.Name `xml:"DAV: acl"`
-	ACE     []Ace    `xml:"DAV: ace"`
+	ACE     []ACE    `xml:"DAV: ace"`
 }
 
-type Ace struct {
-	XMLName   xml.Name `xml:"DAV: ace"`
-	Principal Href     `xml:"DAV: principal>href"`
-	Grant     Grant    `xml:"DAV: grant"`
+type ACE struct {
+	XMLName   xml.Name   `xml:"DAV: ace"`
+	Principal Principal  `xml:"DAV: principal"`
+	Grant     *Grant     `xml:"DAV: grant,omitempty"`
+	Deny      *Deny      `xml:"DAV: deny,omitempty"`
+	Protected *struct{}  `xml:"DAV: protected,omitempty"`
+	Inherited *Inherited `xml:"DAV: inherited,omitempty"`
+}
+
+type Principal struct {
+	XMLName         xml.Name  `xml:"DAV: principal"`
+	Href            *Href     `xml:"href,omitempty"`
+	All             *struct{} `xml:"DAV: all,omitempty"`
+	Authenticated   *struct{} `xml:"DAV: authenticated,omitempty"`
+	Unauthenticated *struct{} `xml:"DAV: unauthenticated,omitempty"`
+	Self            *struct{} `xml:"DAV: self,omitempty"`
 }
 
 type Grant struct {
-	XMLName xml.Name `xml:"DAV: grant"`
-	Privs   []Priv   `xml:"DAV: privilege"`
+	XMLName   xml.Name    `xml:"DAV: grant"`
+	Privilege []Privilege `xml:"DAV: privilege"`
 }
 
-type Priv struct {
+type Deny struct {
+	XMLName   xml.Name    `xml:"DAV: deny"`
+	Privilege []Privilege `xml:"DAV: privilege"`
+}
+
+type Inherited struct {
+	XMLName xml.Name `xml:"DAV: inherited"`
+	Href    Href     `xml:"href"`
+}
+
+type Privilege struct {
 	XMLName                     xml.Name  `xml:"DAV: privilege"`
 	Read                        *struct{} `xml:"DAV: read,omitempty"`
-	WriteProps                  *struct{} `xml:"DAV: write-properties,omitempty"`
+	Write                       *struct{} `xml:"DAV: write,omitempty"`
+	WriteProperties             *struct{} `xml:"DAV: write-properties,omitempty"`
 	WriteContent                *struct{} `xml:"DAV: write-content,omitempty"`
 	Bind                        *struct{} `xml:"DAV: bind,omitempty"`
 	Unbind                      *struct{} `xml:"DAV: unbind,omitempty"`
-	Write                       *struct{} `xml:"DAV: write,omitempty"`
 	Unlock                      *struct{} `xml:"DAV: unlock,omitempty"`
 	ReadACL                     *struct{} `xml:"DAV: read-acl,omitempty"`
-	ReadCurrentUserPrivilegeSet *struct{} `xml:"DAV: read-current-user-privilege-set,omitempty"`
 	WriteACL                    *struct{} `xml:"DAV: write-acl,omitempty"`
+	ReadCurrentUserPrivilegeSet *struct{} `xml:"DAV: read-current-user-privilege-set,omitempty"`
 	All                         *struct{} `xml:"DAV: all,omitempty"`
+	ReadFreeBusy                *struct{} `xml:"urn:ietf:params:xml:ns:caldav read-free-busy,omitempty"`
+}
+
+type Owner struct {
+	XMLName xml.Name `xml:"DAV: owner"`
+	Href    *Href    `xml:"href,omitempty"`
+}
+
+type SupportedPrivilegeSet struct {
+	XMLName            xml.Name             `xml:"DAV: supported-privilege-set"`
+	SupportedPrivilege []SupportedPrivilege `xml:"DAV: supported-privilege"`
+}
+
+type SupportedPrivilege struct {
+	XMLName     xml.Name  `xml:"DAV: supported-privilege"`
+	Privilege   Privilege `xml:"DAV: privilege"`
+	Abstract    *struct{} `xml:"DAV: abstract,omitempty"`
+	Description string    `xml:"DAV: description,omitempty"`
+}
+
+type CurrentUserPrivilegeSet struct {
+	XMLName   xml.Name    `xml:"DAV: current-user-privilege-set"`
+	Privilege []Privilege `xml:"DAV: privilege"`
 }
 
 type CalendarHomeSet struct {
@@ -370,6 +415,6 @@ type DisplayName struct {
 
 type CurrentUserPrincipal struct {
 	XMLName         xml.Name  `xml:"DAV: current-user-principal"`
-	Href            Href      `xml:"href,omitempty"`
+	Href            *Href     `xml:"href,omitempty"`
 	Unauthenticated *struct{} `xml:"unauthenticated,omitempty"`
 }
