@@ -615,6 +615,9 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 						if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
 							colorProp.XMLName.Local == "calendar-color" {
 							color = colorProp.Text
+							if len(colorProp.Text) == 9 && colorProp.Text[0] == '#' { // #RRGGBBAA
+								color = colorProp.Text[:7] // Keep only #RRGGBB
+							}
 							break
 						}
 					}
@@ -729,7 +732,11 @@ func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 			if err := xml.Unmarshal(xmlBytes, &colorProp); err == nil {
 				if colorProp.XMLName.Space == "http://apple.com/ns/ical/" &&
 					colorProp.XMLName.Local == "calendar-color" {
-					return colorProp.Text
+					newColor := colorProp.Text
+					if len(colorProp.Text) == 9 && colorProp.Text[0] == '#' { // #RRGGBBAA
+						newColor = colorProp.Text[:7] // Keep only #RRGGBB
+					}
+					return newColor
 				}
 			}
 		}
