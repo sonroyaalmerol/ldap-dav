@@ -158,6 +158,7 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 	logTmp := r.logger.Info().
 		Str("method", method).
 		Str("path", path).
+		Str("service", serviceName).
 		Int("status", statusOrDefault(rec.status)).
 		Int("bytes", rec.bytes).
 		Float64("duration_ms", float64(dur.Microseconds())/1000.0).
