@@ -12,7 +12,6 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
-	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
 var _ DAVService = (*caldav.Handlers)(nil)
