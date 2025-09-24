@@ -285,23 +285,12 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if pr.UserID != owner {
-			eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
-			if err != nil {
-				h.logger.Error().Err(err).
-					Str("user", pr.UserID).
-					Str("calendar", calURI).
-					Msg("ACL check failed in DELETE calendar")
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-			if !eff.Unbind {
-				h.logger.Debug().
-					Str("user", pr.UserID).
-					Str("calendar", calURI).
-					Msg("insufficient DAV:unbind privileges for DELETE calendar")
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
+			h.logger.Debug().
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("insufficient privileges for DELETE calendar")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
 		}
 
 		if err := h.store.DeleteCalendar(owner, calURI); err != nil {
@@ -348,11 +337,11 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if !eff.WriteContent {
+		if !eff.Unbind {
 			h.logger.Debug().
 				Str("user", pr.UserID).
 				Str("calendar", calURI).
-				Msg("insufficient DAV:write-content privileges for DELETE object")
+				Msg("insufficient DAV:unbind privileges for DELETE object")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -550,23 +539,12 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if pr.UserID != owner {
-		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, "")
-		if err != nil {
-			h.logger.Error().Err(err).
-				Str("user", pr.UserID).
-				Str("owner", owner).
-				Msg("ACL check failed in MKCALENDAR")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		if !eff.Bind {
-			h.logger.Debug().
-				Str("user", pr.UserID).
-				Str("owner", owner).
-				Msg("insufficient DAV:bind privileges for MKCALENDAR")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
+		h.logger.Debug().
+			Str("user", pr.UserID).
+			Str("owner", owner).
+			Msg("insufficient privileges for MKCALENDAR")
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	if !common.SafeCollectionName(calURI) {
