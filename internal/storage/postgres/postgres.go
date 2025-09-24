@@ -30,10 +30,10 @@ func (s *Store) Close() { s.pool.Close() }
 
 func (s *Store) GetCalendarByID(ctx context.Context, id string) (*storage.Calendar, error) {
 	row := s.pool.QueryRow(ctx, `
-		select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-		from calendars where id::text = $1`, id)
+        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        from calendars where id::text = $1`, id)
 	var c storage.Calendar
-	if err := row.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.Color, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -50,8 +50,8 @@ func (s *Store) UpdateCalendarDisplayName(ctx context.Context, ownerUID, calURI 
 
 func (s *Store) ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*storage.Calendar, error) {
 	rows, err := s.pool.Query(ctx, `
-		select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-		from calendars where owner_user_id = $1`, uid)
+        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        from calendars where owner_user_id = $1`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (s *Store) ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*st
 	var out []*storage.Calendar
 	for rows.Next() {
 		var c storage.Calendar
-		if err := rows.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.Color, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
@@ -69,8 +69,8 @@ func (s *Store) ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*st
 
 func (s *Store) ListAllCalendars(ctx context.Context) ([]*storage.Calendar, error) {
 	rows, err := s.pool.Query(ctx, `
-		select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-		from calendars`)
+        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        from calendars`)
 	if err != nil {
 		return nil, err
 	}
@@ -78,12 +78,21 @@ func (s *Store) ListAllCalendars(ctx context.Context) ([]*storage.Calendar, erro
 	var out []*storage.Calendar
 	for rows.Next() {
 		var c storage.Calendar
-		if err := rows.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.Color, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
 	}
 	return out, nil
+}
+
+func (s *Store) UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color string) error {
+	_, err := s.pool.Exec(ctx, `
+        update calendars
+        set color = $1, updated_at = now()
+        where owner_user_id = $2 and uri = $3
+    `, color, ownerUID, calURI)
+	return err
 }
 
 func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage.Object, error) {

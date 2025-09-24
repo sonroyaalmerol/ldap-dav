@@ -6,6 +6,7 @@ create table if not exists calendars (
   display_name text,
   description text,
   ctag text not null,
+  color varchar(7) default '#3174ad',
   sync_seq bigint not null default 0,
   sync_token text not null default 'seq:0',
   created_at timestamptz not null default now(),

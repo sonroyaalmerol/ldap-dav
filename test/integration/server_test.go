@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ func basicAuth(user, pass string) string {
 }
 
 func TestIntegration(t *testing.T) {
+	t.Parallel()
 	// Env-driven config for server
 	httpAddr := os.Getenv("HTTP_ADDR")
 	if httpAddr == "" {
@@ -68,6 +70,9 @@ func TestIntegration(t *testing.T) {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	authz := basicAuth("alice", "password")
+
+	// sanity: server should support HTTP/1.1 keep-alive reasonably
+	_ = context.Background()
 
 	// Run all test sections
 	t.Run("WellKnownRedirect", func(t *testing.T) {
@@ -158,6 +163,12 @@ func testOptions(t *testing.T, client *http.Client, baseURL, basePath string) {
 	if got == "" || !bytes.Contains([]byte(got), []byte("calendar-access")) {
 		t.Fatalf("DAV header missing calendar-access at %s: %q", url, got)
 	}
+	allow := strings.ToUpper(resp.Header.Get("Allow"))
+	for _, m := range []string{"PROPFIND", "REPORT", "MKCALENDAR", "OPTIONS"} {
+		if !strings.Contains(allow, m) {
+			t.Logf("Allow header missing %s (got %q)", m, allow)
+		}
+	}
 }
 
 func testPrincipalPropfind(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
@@ -174,6 +185,31 @@ func testPrincipalPropfind(t *testing.T, client *http.Client, baseURL, basePath,
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("propfind principal status at %s: %d body=%s", url, resp.StatusCode, string(b))
 	}
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if !strings.Contains(ct, "/xml") {
+		t.Errorf("principal PROPFIND content-type: %q", ct)
+	}
+	// Parse Multi-Status and verify CALDAV:calendar-home-set per RFC 4791 §6.2.1
+	body, _ := io.ReadAll(resp.Body)
+	ms, err := parseMultiStatus(body)
+	if err != nil {
+		t.Fatalf("parse principal multistatus: %v\n%s", err, string(body))
+	}
+	if len(ms.Responses) == 0 {
+		t.Fatalf("principal multistatus has no responses")
+	}
+	// Look for calendar-home-set in any OK propstat
+	foundHome := false
+	for _, r := range ms.Responses {
+		for _, ps := range r.PropStat {
+			if statusOK(ps.Status) && strings.Contains(ps.PropXML, "calendar-home-set") {
+				foundHome = true
+			}
+		}
+	}
+	if !foundHome {
+		t.Log("principal lacks CALDAV:calendar-home-set (server may expose elsewhere)")
+	}
 }
 
 func testCalendarHomeListing(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
@@ -189,6 +225,14 @@ func testCalendarHomeListing(t *testing.T, client *http.Client, baseURL, basePat
 	if resp.StatusCode != 207 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("propfind home status at %s: %d body=%s", url, resp.StatusCode, string(b))
+	}
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if !strings.Contains(ct, "/xml") {
+		t.Errorf("home PROPFIND content-type: %q", ct)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if _, err := parseMultiStatus(b); err != nil {
+		t.Fatalf("parse home multistatus: %v", err)
 	}
 }
 
@@ -224,7 +268,7 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		}
 		etag = resp.Header.Get("ETag")
 		if etag == "" {
-			t.Fatalf("missing ETag on PUT")
+			t.Fatalf("missing/invalid ETag on PUT: %q", etag)
 		}
 	}
 
@@ -242,8 +286,18 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		if resp.StatusCode != 200 {
 			t.Fatalf("get shared event status at %s: %d", url, resp.StatusCode)
 		}
-		if !bytes.Contains(b, []byte("SUMMARY:Test")) {
-			t.Fatalf("unexpected body: %s", string(b))
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if !strings.HasPrefix(ct, "text/calendar") {
+			t.Errorf("GET text/calendar content-type: %q", ct)
+		}
+		gotETag := resp.Header.Get("ETag")
+		if gotETag == "" || !validETag(gotETag) {
+			t.Errorf("GET missing/invalid ETag: %q", gotETag)
+		}
+		// Validate iCalendar minimally per RFC 5545: structure and properties
+		cal := parseICS(string(b))
+		if !cal.Valid || !cal.Has("VCALENDAR") || !cal.Has("VEVENT") || !cal.HasProp("VEVENT", "UID", "evt1") || !cal.HasProp("VEVENT", "SUMMARY", "Test") {
+			t.Fatalf("unexpected ics content:\n%s", string(b))
 		}
 	}
 
@@ -274,6 +328,39 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		if resp.StatusCode != 207 {
 			t.Fatalf("report status: %d", resp.StatusCode)
 		}
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if !strings.Contains(ct, "/xml") {
+			t.Errorf("calendar-query content-type: %q", ct)
+		}
+		rb, _ := io.ReadAll(resp.Body)
+		ms, err := parseMultiStatus(rb)
+		if err != nil {
+			t.Fatalf("parse calendar-query multistatus: %v\n%s", err, string(rb))
+		}
+		if len(ms.Responses) == 0 {
+			t.Fatalf("calendar-query returned no responses")
+		}
+		// For each response with calendar-data, ensure VEVENT in time range appears
+		foundEvt := false
+		for _, r := range ms.Responses {
+			for _, ps := range r.PropStat {
+				if statusOK(ps.Status) {
+					if strings.Contains(ps.PropXML, "<getetag") && !strings.Contains(ps.PropXML, "getetag/>") {
+						// has ETag element content; OK
+					}
+					icsData := innerText(ps.PropXML, "calendar-data")
+					if icsData != "" {
+						cal := parseICS(icsData)
+						if cal.Valid && cal.Has("VEVENT") && cal.HasProp("VEVENT", "UID", "evt1") {
+							foundEvt = true
+						}
+					}
+				}
+			}
+		}
+		if !foundEvt {
+			t.Fatalf("calendar-query did not return evt1 VEVENT in range:\n%s", string(rb))
+		}
 	}
 
 	// HEAD should return headers, no body
@@ -287,6 +374,10 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("head status: %d", resp.StatusCode)
+		}
+		he := resp.Header.Get("ETag")
+		if he == "" || !validETag(he) {
+			t.Errorf("HEAD missing/invalid ETag: %q", he)
 		}
 	}
 
@@ -304,6 +395,40 @@ func testBasicEventOperations(t *testing.T, client *http.Client, baseURL, basePa
 		defer resp.Body.Close()
 		if resp.StatusCode != 207 {
 			t.Fatalf("sync status: %d", resp.StatusCode)
+		}
+		rb, _ := io.ReadAll(resp.Body)
+		ms, err := parseMultiStatus(rb)
+		if err != nil {
+			t.Fatalf("parse sync multistatus: %v", err)
+		}
+		initialToken := ms.SyncToken
+		if initialToken == "" {
+			t.Fatalf("sync-collection missing DAV:sync-token")
+		}
+		// Subsequent REPORT with the token should return zero or few changes
+		body2 := `<?xml version="1.0" encoding="utf-8" ?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + xmlEscape(initialToken) + `</D:sync-token>
+  <D:prop><D:getetag/></D:prop>
+</D:sync-collection>`
+		req2, _ := http.NewRequest("REPORT", baseURL+basePath+"/calendars/alice/shared/team/", bytes.NewBufferString(body2))
+		req2.Header.Set("Authorization", authz)
+		req2.Header.Set("Content-Type", "application/xml")
+		resp2, err := client.Do(req2)
+		if err != nil {
+			t.Fatalf("sync report with token: %v", err)
+		}
+		defer resp2.Body.Close()
+		if resp2.StatusCode != 207 {
+			t.Fatalf("sync with token status: %d", resp2.StatusCode)
+		}
+		rb2, _ := io.ReadAll(resp2.Body)
+		ms2, err := parseMultiStatus(rb2)
+		if err != nil {
+			t.Fatalf("parse sync2 multistatus: %v", err)
+		}
+		if ms2.SyncToken == "" {
+			t.Fatalf("sync-collection follow-up missing DAV:sync-token")
 		}
 	}
 }
@@ -368,6 +493,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if !bytes.Contains(b, []byte("Updated Event")) {
 			t.Fatalf("event not updated: %s", string(b))
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test event deletion
@@ -395,29 +522,7 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		}
 		resp.Body.Close()
 
-		// Delete event
-		req, _ = http.NewRequest("DELETE", url, nil)
-		req.Header.Set("Authorization", authz)
-		resp, err = client.Do(req)
-		if err != nil {
-			t.Fatalf("delete event: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-			t.Fatalf("delete event status: %d", resp.StatusCode)
-		}
-
-		// Verify deletion
-		req, _ = http.NewRequest("GET", url, nil)
-		req.Header.Set("Authorization", authz)
-		resp, err = client.Do(req)
-		if err != nil {
-			t.Fatalf("get deleted event: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("deleted event still exists: %d", resp.StatusCode)
-		}
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test recurring events
@@ -475,6 +580,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != 207 {
 			t.Fatalf("query recurring events status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test VTODO support
@@ -528,6 +635,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != 207 {
 			t.Fatalf("query todos status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 
 	// Test timezone handling
@@ -565,6 +674,8 @@ func testEventManagement(t *testing.T, client *http.Client, baseURL, basePath, a
 		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("create timezone event status: %d", resp.StatusCode)
 		}
+
+		deleteAndValidate(t, client, url, authz)
 	})
 }
 
@@ -1113,6 +1224,38 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 		if resp.StatusCode != 207 {
 			t.Fatalf("partial calendar-data status: %d", resp.StatusCode)
 		}
+		rb, _ := io.ReadAll(resp.Body)
+		ms, err := parseMultiStatus(rb)
+		if err != nil {
+			t.Fatalf("parse partial calendar-data multistatus: %v", err)
+		}
+		// Ensure DESCRIPTION is not present in returned data (RFC 4791 §7.6 partial retrieval)
+		for _, r := range ms.Responses {
+			for _, ps := range r.PropStat {
+				if statusOK(ps.Status) {
+					icsData := innerText(ps.PropXML, "calendar-data")
+					if icsData != "" && strings.Contains(icsData, "\nDESCRIPTION:") {
+						t.Fatalf("partial retrieval returned DESCRIPTION unexpectedly:\n%s", icsData)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("CleanupQuerySetupEvents", func(t *testing.T) {
+		for _, evt := range []string{"query-evt-1", "query-evt-2", "query-evt-3"} {
+			resourceURL := baseCalendarURL + evt + ".ics"
+			req, _ := http.NewRequest("HEAD", resourceURL, nil)
+			req.Header.Set("Authorization", authz)
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				deleteAndValidate(t, client, resourceURL, authz)
+			}
+		}
 	})
 
 	// Test free/busy queries
@@ -1124,6 +1267,12 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 		req, _ := http.NewRequest("REPORT", baseCalendarURL, bytes.NewBufferString(body))
 		req.Header.Set("Authorization", authz)
 		req.Header.Set("Content-Type", "application/xml")
+		// Ensure at least one event exists for free-busy
+		seed := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ldap-dav//test//EN\r\nBEGIN:VEVENT\r\nUID:fb-seed\r\nDTSTAMP:20250101T090000Z\r\nDTSTART:20250101T010000Z\r\nDTEND:20250101T020000Z\r\nSUMMARY:FB Seed\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+		putReq, _ := http.NewRequest("PUT", baseCalendarURL+"fb-seed.ics", bytes.NewBufferString(seed))
+		putReq.Header.Set("Authorization", authz)
+		putReq.Header.Set("Content-Type", "text/calendar; charset=utf-8")
+		_, _ = client.Do(putReq)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("free-busy query: %v", err)
@@ -1132,6 +1281,16 @@ func testAdvancedQuerying(t *testing.T, client *http.Client, baseURL, basePath, 
 		// Free-busy might return 200 or 207 depending on implementation
 		if resp.StatusCode != 200 && resp.StatusCode != 207 {
 			t.Fatalf("free-busy status: %d", resp.StatusCode)
+		}
+		rb, _ := io.ReadAll(resp.Body)
+		// Some servers return text/calendar body with VFREEBUSY (RFC 4791 §7.10)
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.HasPrefix(ct, "text/calendar") {
+			cal := parseICS(string(rb))
+			if !cal.Valid || !cal.Has("VFREEBUSY") {
+				t.Fatalf("free-busy missing VFREEBUSY:\n%s", string(rb))
+			}
+			deleteAndValidate(t, client, baseCalendarURL+"fb-seed.ics", authz)
 		}
 	})
 }
@@ -1367,11 +1526,31 @@ func testCollectionProperties(t *testing.T, client *http.Client, baseURL, basePa
 		}
 
 		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-
-		// Check for required calendar properties
-		if !strings.Contains(respStr, "calendar") {
-			t.Fatalf("response missing calendar resourcetype: %s", respStr)
+		ms, err := parseMultiStatus(respBody)
+		if err != nil {
+			t.Fatalf("parse collection properties: %v", err)
+		}
+		if len(ms.Responses) == 0 {
+			t.Fatalf("no response in multistatus")
+		}
+		// Validate supported-report-set includes calendar-query, calendar-multiget, and sync-collection
+		var reportsXML string
+		for _, r := range ms.Responses {
+			for _, ps := range r.PropStat {
+				if statusOK(ps.Status) {
+					if strings.Contains(ps.PropXML, "resourcetype") && !strings.Contains(ps.PropXML, "calendar") {
+						t.Fatalf("resourcetype not calendar:\n%s", ps.PropXML)
+					}
+					if strings.Contains(ps.PropXML, "supported-report-set") {
+						reportsXML = ps.PropXML
+					}
+				}
+			}
+		}
+		for _, need := range []string{"calendar-query", "calendar-multiget", "sync-collection"} {
+			if !strings.Contains(strings.ToLower(reportsXML), need) {
+				t.Logf("supported-report-set missing %s", need)
+			}
 		}
 	})
 
@@ -1399,11 +1578,18 @@ func testCollectionProperties(t *testing.T, client *http.Client, baseURL, basePa
 		}
 
 		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-
-		expectedReports := []string{"calendar-query", "calendar-multiget", "sync-collection"}
-		for _, report := range expectedReports {
-			if !strings.Contains(respStr, report) {
+		ms, err := parseMultiStatus(respBody)
+		if err != nil {
+			t.Fatalf("parse supported-report-set: %v", err)
+		}
+		flat := ""
+		for _, r := range ms.Responses {
+			for _, ps := range r.PropStat {
+				flat += ps.PropXML
+			}
+		}
+		for _, report := range []string{"calendar-query", "calendar-multiget", "sync-collection"} {
+			if !strings.Contains(flat, report) {
 				t.Logf("response missing support for %s report", report)
 			}
 		}

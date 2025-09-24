@@ -1,6 +1,8 @@
 package caldav
 
 import (
+	"encoding/xml"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,10 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in calendar-query")
 		http.NotFound(w, r)
 		return
 	}
@@ -46,6 +52,9 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, comps, start, end)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to list objects in calendar-query")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -55,14 +64,16 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	if start != nil && end != nil && common.ContainsComponent(comps, "VEVENT") {
 		resps = h.buildExpandedEventResponses(objs, *start, *end, props, owner, calURI)
 	} else {
-		// No time range or not querying events - return original objects
 		for _, o := range objs {
 			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
 			resps = append(resps, buildReportResponse(hrefStr, props, o))
 		}
 	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for calendar-query")
+	}
 }
 
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
@@ -80,15 +91,28 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 
 		calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("owner", owner).
+				Str("calendar", calURI).
+				Msg("failed to resolve calendar in multiget")
 			continue
 		}
 		pr := common.MustPrincipal(r.Context())
 		okRead, err := h.aclCheckRead(r.Context(), pr, calURI, calOwner)
 		if err != nil || !okRead {
+			h.logger.Debug().Err(err).
+				Bool("can_read", okRead).
+				Str("user", pr.UserID).
+				Str("calendar", calURI).
+				Msg("ACL check failed in multiget")
 			continue
 		}
 		o, err := h.store.GetObject(r.Context(), calendarID, uid)
 		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("calendarID", calendarID).
+				Str("uid", uid).
+				Msg("failed to get object in multiget")
 			continue
 		}
 
@@ -102,37 +126,41 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{Responses: resps}
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for calendar-multiget")
+	}
 }
 
 func buildReportResponse(hrefStr string, props common.PropRequest, o *storage.Object) common.Response {
-	p := common.Prop{}
-	p.ContentType = common.CalContentType()
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: hrefStr}},
+	}
+	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
 	if props.CalendarData {
-		p.CalendarDataText = o.Data
+		type CalendarData struct {
+			XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+			Text    string   `xml:",chardata"`
+		}
+		_ = resp.EncodeProp(http.StatusOK, CalendarData{Text: o.Data})
 	}
 	if props.GetETag && o.ETag != "" {
-		gt := `"` + o.ETag + `"`
-		p.GetETag = gt
+		_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(o.ETag)})
 	}
-	// Always include last-modified if available
 	if !o.UpdatedAt.IsZero() {
-		// RFC 1123 format required by DAV:getlastmodified
-		p.GetLastModified = o.UpdatedAt.UTC().Format(time.RFC1123)
+		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(o.UpdatedAt)})
 	}
-	return common.Response{
-		Href: hrefStr,
-		Props: []common.PropStat{{
-			Prop:   p,
-			Status: common.Ok(),
-		}},
-	}
+	return resp
 }
 
 func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, sc common.SyncCollection) {
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in sync-collection")
 		http.NotFound(w, r)
 		return
 	}
@@ -141,8 +169,13 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	props := common.ParsePropRequest(sc.Prop)
+
 	curToken, _, err := h.store.GetSyncInfo(r.Context(), calendarID)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to get sync info")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -159,95 +192,138 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	}
 	changes, _, err := h.store.ListChangesSince(r.Context(), calendarID, sinceSeq, limit)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Int64("since", sinceSeq).
+			Int("limit", limit).
+			Msg("failed to list changes")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
-	colHref := calendarPath(h.basePath, owner, calURI)
-	resps := []common.Response{
-		{
-			Href: colHref,
-			Props: []common.PropStat{{
-				Prop: common.Prop{
-					ResourceType:                  common.MakeCalendarResourcetype(),
-					SupportedCalendarComponentSet: &common.SupportedCompSet{Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}}},
-					SyncToken:                     &curToken,
-				},
-				Status: common.Ok(),
-			}},
-		},
-	}
+	var resps []common.Response
 
-	if limit > 0 && len(changes) == limit {
-		n := len(changes)
-		resps[0].Props = append(resps[0].Props, common.PropStat{
-			Prop:   common.Prop{MatchesWithinLimits: &n},
-			Status: common.Ok(),
-		})
+	baseHref := r.URL.Path
+	if !strings.HasSuffix(baseHref, "/") {
+		baseHref += "/"
 	}
 
 	for _, ch := range changes {
-		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, ch.UID+".ics")
+		hrefStr := baseHref + ch.UID + ".ics"
 		if ch.Deleted {
-			resps = append(resps, common.Response{
-				Href: hrefStr,
-				Props: []common.PropStat{{
-					Prop:   common.Prop{},
-					Status: "HTTP/1.1 404 Not Found",
-				}},
-			})
+			resp := common.Response{
+				Hrefs: []common.Href{{Value: hrefStr}},
+			}
+			resp.Status = &common.Status{Code: http.StatusNotFound}
+			resps = append(resps, resp)
 		} else {
-			resps = append(resps, common.Response{
-				Href: hrefStr,
-				Props: []common.PropStat{{
-					Prop:   common.Prop{ContentType: common.CalContentType()},
-					Status: common.Ok(),
-				}},
-			})
+			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+			var obj *storage.Object
+			var getErr error
+			needObject := props.CalendarData || props.GetETag
+			if needObject {
+				obj, getErr = h.store.GetObject(r.Context(), calendarID, ch.UID)
+				if getErr != nil {
+					h.logger.Debug().Err(getErr).
+						Str("calendarID", calendarID).
+						Str("uid", ch.UID).
+						Msg("object disappeared between change listing and fetch")
+					resp.Status = &common.Status{Code: http.StatusNotFound}
+					resps = append(resps, resp)
+					continue
+				}
+			}
+			if props.GetETag && obj != nil && obj.ETag != "" {
+				_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(obj.ETag)})
+			}
+			if props.CalendarData && obj != nil {
+				type CalendarData struct {
+					XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+					Text    string   `xml:",chardata"`
+				}
+				_ = resp.EncodeProp(http.StatusOK, CalendarData{Text: obj.Data})
+			}
+			resps = append(resps, resp)
 		}
 	}
 
-	WriteMultiStatus(w, common.MultiStatus{Resp: resps})
+	ms := common.MultiStatus{
+		Responses: resps,
+		SyncToken: curToken,
+	}
+	if limit > 0 && len(changes) == limit {
+		ms.NumberOfMatchesWithinLimits = fmt.Sprintf("%d", len(changes))
+	}
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for sync-collection")
+	}
 }
 
 func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, fb common.FreeBusyQuery) {
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("owner", owner).
+			Str("calendar", calURI).
+			Msg("failed to resolve calendar in free-busy-query")
 		http.NotFound(w, r)
 		return
 	}
+
 	pr := common.MustPrincipal(r.Context())
 	if ok := h.mustCanRead(w, r.Context(), pr, calURI, calOwner); !ok {
 		return
 	}
 
 	if fb.Time == nil || fb.Time.Start == "" || fb.Time.End == "" {
+		h.logger.Error().Msg("free-busy query missing required time-range")
 		http.Error(w, "time-range required", http.StatusBadRequest)
 		return
 	}
+
 	start, err := common.ParseICalTime(fb.Time.Start)
 	if err != nil {
+		h.logger.Error().Err(err).Str("start", fb.Time.Start).Msg("bad start time in free-busy query")
 		http.Error(w, "bad start", http.StatusBadRequest)
 		return
 	}
+
 	end, err := common.ParseICalTime(fb.Time.End)
 	if err != nil {
+		h.logger.Error().Err(err).Str("end", fb.Time.End).Msg("bad end time in free-busy query")
 		http.Error(w, "bad end", http.StatusBadRequest)
 		return
 	}
+
 	if !end.After(start) {
+		h.logger.Error().
+			Time("start", start).
+			Time("end", end).
+			Msg("invalid time range in free-busy query")
 		http.Error(w, "end must be after start", http.StatusBadRequest)
 		return
 	}
 
-	// Get VEVENTs and expand recurrences for free/busy calculation
 	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
 	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Msg("failed to list events for free-busy query")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
+	busy := h.buildBusyIntervals(objs, start, end)
+
+	icsData := common.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	if _, err := w.Write(icsData); err != nil {
+		h.logger.Error().Err(err).Msg("failed to write free-busy response")
+	}
+}
+
+func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Time) []ical.Interval {
 	var busy []ical.Interval
 	expander := ical.NewRecurrenceExpander(time.UTC)
 
@@ -256,53 +332,60 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 			continue
 		}
 
-		// Parse and expand recurring events
 		events, err := ical.ParseCalendar([]byte(o.Data))
 		if err != nil {
-			// Fall back to using object's stored start/end times
-			if o.StartAt != nil && o.EndAt != nil {
-				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
-					s := common.MaxTime(*o.StartAt, start)
-					e := common.MinTime(*o.EndAt, end)
-					if e.After(s) {
-						busy = append(busy, ical.Interval{S: s, E: e})
-					}
-				}
+			h.logger.Debug().Err(err).
+				Str("uid", o.UID).
+				Msg("failed to parse calendar, using fallback interval if available")
+			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 			continue
 		}
 
 		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
 		if err != nil {
-			// Fall back to stored times
-			if o.StartAt != nil && o.EndAt != nil {
-				if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
-					s := common.MaxTime(*o.StartAt, start)
-					e := common.MinTime(*o.EndAt, end)
-					if e.After(s) {
-						busy = append(busy, ical.Interval{S: s, E: e})
-					}
-				}
+			h.logger.Debug().Err(err).
+				Str("uid", o.UID).
+				Msg("failed to expand recurrences, using fallback interval if available")
+			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 			continue
 		}
 
-		// Add busy periods from all expanded instances
 		for _, event := range expandedEvents {
-			if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
-				s := common.MaxTime(event.Start, start)
-				e := common.MinTime(event.End, end)
-				if e.After(s) {
-					busy = append(busy, ical.Interval{S: s, E: e})
-				}
+			if interval := h.eventToInterval(event, start, end); interval != nil {
+				busy = append(busy, *interval)
 			}
 		}
 	}
 
-	busy = common.MergeIntervalsFB(busy)
+	return common.MergeIntervalsFB(busy)
+}
 
-	icsData := ical.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
+func (h *Handlers) extractFallbackInterval(o *storage.Object, start, end time.Time) *ical.Interval {
+	if o.StartAt == nil || o.EndAt == nil {
+		return nil
+	}
 
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	w.Write(icsData)
+	if o.EndAt.After(start) && (end.After(*o.StartAt) || end.Equal(*o.StartAt)) {
+		s := common.MaxTime(*o.StartAt, start)
+		e := common.MinTime(*o.EndAt, end)
+		if e.After(s) {
+			return &ical.Interval{S: s, E: e}
+		}
+	}
+	return nil
+}
+
+func (h *Handlers) eventToInterval(event *ical.Event, start, end time.Time) *ical.Interval {
+	if event.End.After(start) && (end.After(event.Start) || end.Equal(event.Start)) {
+		s := common.MaxTime(event.Start, start)
+		e := common.MinTime(event.End, end)
+		if e.After(s) {
+			return &ical.Interval{S: s, E: e}
+		}
+	}
+	return nil
 }

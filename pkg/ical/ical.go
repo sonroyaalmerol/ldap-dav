@@ -3,7 +3,6 @@ package ical
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -80,40 +79,4 @@ func EnsureDTStamp(data []byte) ([]byte, bool) {
 	}
 
 	return buf.Bytes(), true
-}
-
-func BuildFreeBusyICS(start, end time.Time, busyIntervals []Interval, prodID string) []byte {
-	cal := &ical.Calendar{
-		Component: &ical.Component{
-			Name:  ical.CompCalendar,
-			Props: ical.Props{},
-		},
-	}
-
-	cal.Props.SetText(ical.PropProductID, prodID)
-	cal.Props.SetText(ical.PropVersion, "2.0")
-
-	freeBusy := &ical.Component{
-		Name:  ical.CompFreeBusy,
-		Props: ical.Props{},
-	}
-
-	freeBusy.Props.SetDateTime(ical.PropDateTimeStart, start.UTC())
-	freeBusy.Props.SetDateTime(ical.PropDateTimeEnd, end.UTC())
-
-	for _, interval := range busyIntervals {
-		prop := ical.NewProp(ical.PropFreeBusy)
-		prop.Params.Set("FBTYPE", "BUSY")
-		prop.SetText(fmt.Sprintf("%s/%s",
-			interval.S.UTC().Format("20060102T150405Z"),
-			interval.E.UTC().Format("20060102T150405Z")))
-		freeBusy.Props.Add(prop)
-	}
-
-	cal.Children = []*ical.Component{freeBusy}
-
-	var buf bytes.Buffer
-	enc := ical.NewEncoder(&buf)
-	enc.Encode(cal)
-	return buf.Bytes()
 }

@@ -9,7 +9,7 @@ Production usage: Docker-only
 Key features
 - CalDAV (RFC 4791) on top of WebDAV (RFC 4918)
 - Sharing and ACLs via LDAP groups only
-  - Each LDAP group declares which calendars it grants access to and which privileges (read, edit/write-props, write-content, create/bind, delete/unbind)
+  - Each LDAP group declares which calendars it grants access to and which privileges (read, write-props, write-content, bind, unbind, read-acl)
 - Users/groups are not replicated; resolved on-demand with short caching
 - Auth: HTTP Basic (LDAP bind) and Bearer (JWT via JWKS; opaque via RFC 7662 introspection optional)
   - JWKS keys are cached; token verification results are also cached briefly
@@ -119,10 +119,11 @@ Storage
 
 Privilege mapping:
 - read -> PROPFIND/REPORT/GET
-- edit/write-props -> PROPPATCH (rename, displayname)
+- write-props -> PROPPATCH (rename, displayname)
 - write-content -> PUT event body
-- bind (create) -> PUT new object
-- unbind (delete) -> DELETE object
+- bind -> PUT new object
+- unbind -> DELETE object
+- read-acl
 
 ## Endpoints
 
@@ -142,9 +143,8 @@ Methods
 - PROPFIND: principals, home, calendars; collection/object properties
 - REPORT: calendar-query, calendar-multiget, sync-collection, free-busy-query
 - GET/HEAD/PUT/DELETE: iCalendar objects
-- MKCOL: disabled for now; provision calendars via DB
+- MKCOL/MKCALENDAR: create collection/calendar
 - PROPPATCH: updates displayname (requires edit privilege)
-- ACL: always 403 (ACLs come from LDAP)
 
 ## Security
 
@@ -158,9 +158,8 @@ Methods
 
 - Scheduling (RFC 6638): inbox/outbox resources, iTIP processing, delivery
 - Nested LDAP groups resolution (configurable depth)
-- More complete number-of-matches-within-limits
 - CardDAV (/.well-known/carddav)
-- Admin APIs (calendar provisioning), quotas
+- Quotas
 
 ## License
 

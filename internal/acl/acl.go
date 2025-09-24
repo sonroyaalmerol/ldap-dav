@@ -26,7 +26,9 @@ func (p *LDAPACL) Effective(ctx context.Context, user *directory.User, calendarI
 	if err != nil {
 		return Effective{}, err
 	}
+
 	e := Effective{}
+
 	for _, a := range acls {
 		if a.CalendarID != calendarID {
 			continue
@@ -46,6 +48,15 @@ func (p *LDAPACL) Effective(ctx context.Context, user *directory.User, calendarI
 		if a.Unbind {
 			e.Unbind = true
 		}
+		if a.ReadACL {
+			e.ReadACL = true
+		}
+		if a.ReadCurrentUserPrivilegeSet {
+			e.ReadCurrentUserPrivilegeSet = true
+		}
+		if a.Unlock {
+			e.Unlock = true
+		}
 	}
 	return e, nil
 }
@@ -55,9 +66,11 @@ func (p *LDAPACL) VisibleCalendars(ctx context.Context, user *directory.User) (m
 	if err != nil {
 		return nil, err
 	}
+
 	m := map[string]Effective{}
 	for _, a := range acls {
 		e := m[a.CalendarID]
+
 		if a.Read {
 			e.Read = true
 		}
@@ -72,6 +85,15 @@ func (p *LDAPACL) VisibleCalendars(ctx context.Context, user *directory.User) (m
 		}
 		if a.Unbind {
 			e.Unbind = true
+		}
+		if a.ReadACL {
+			e.ReadACL = true
+		}
+		if a.ReadCurrentUserPrivilegeSet {
+			e.ReadCurrentUserPrivilegeSet = true
+		}
+		if a.Unlock {
+			e.Unlock = true
 		}
 		m[a.CalendarID] = e
 	}
