@@ -65,22 +65,10 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	_ = homeResp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
 
 	_ = homeResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
-
-	homeEffectivePrivileges := acl.Effective{
-		Read: true, WriteProps: true, WriteContent: true,
-		Bind: true, Unbind: true, ReadACL: true,
-		ReadCurrentUserPrivilegeSet: true,
-	}
-
-	if homeEffectivePrivileges.CanReadCurrentUserPrivilegeSet() {
-		_ = homeResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-			Privilege: []common.Privilege{{All: &struct{}{}}},
-		})
-	}
-
-	if homeEffectivePrivileges.CanReadACL() {
-		_ = homeResp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
-	}
+	_ = homeResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+		Privilege: []common.Privilege{{All: &struct{}{}}},
+	})
+	_ = homeResp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
 
 	resps = append(resps, homeResp)
 
@@ -109,21 +97,11 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 				Text    string   `xml:",chardata"`
 			}{Text: cc.CTag})
 
-			calendarEffectivePrivileges := acl.Effective{
-				Read: true, WriteProps: true, WriteContent: true,
-				Bind: true, Unbind: true, ReadACL: true,
-				ReadCurrentUserPrivilegeSet: true,
-			}
+			_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+				Privilege: []common.Privilege{{All: &struct{}{}}},
+			})
 
-			if calendarEffectivePrivileges.CanReadCurrentUserPrivilegeSet() {
-				_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-					Privilege: []common.Privilege{{All: &struct{}{}}},
-				})
-			}
-
-			if calendarEffectivePrivileges.CanReadACL() {
-				_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
-			}
+			_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
 			resps = append(resps, resp)
 		}
 
@@ -301,26 +279,20 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 
 	_ = propResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 
-	var effectivePrivileges acl.Effective
 	if isSharedMount && trueOwner != "" && pr.UserID != trueOwner {
 		if eff, err := c.handlers.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, collection); err == nil {
-			effectivePrivileges = eff
+			if eff.CanReadCurrentUserPrivilegeSet() {
+				currentUserPrivs := c.effectiveToPrivileges(eff)
+				_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: currentUserPrivs})
+			}
+
+			if eff.CanReadACL() {
+				acl := c.buildCollectionACL(trueOwner, pr.UserID, isSharedMount, eff)
+				_ = propResp.EncodeProp(http.StatusOK, acl)
+			}
 		}
 	} else {
-		effectivePrivileges = acl.Effective{
-			Read: true, WriteProps: true, WriteContent: true,
-			Bind: true, Unbind: true, ReadACL: true,
-			ReadCurrentUserPrivilegeSet: true,
-		}
-	}
-
-	if effectivePrivileges.CanReadCurrentUserPrivilegeSet() {
-		currentUserPrivs := c.effectiveToPrivileges(effectivePrivileges)
-		_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: currentUserPrivs})
-	}
-
-	if effectivePrivileges.CanReadACL() {
-		acl := c.buildCollectionACL(trueOwner, pr.UserID, isSharedMount, effectivePrivileges)
+		acl := c.buildOwnerACL(pr.UserID)
 		_ = propResp.EncodeProp(http.StatusOK, acl)
 	}
 
