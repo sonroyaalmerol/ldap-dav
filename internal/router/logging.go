@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 type statusRecorder struct {
@@ -62,6 +63,8 @@ func loggingMiddleware(logger zerolog.Logger, next http.Handler) http.Handler {
 		path := req.URL.Path
 		ua := req.Header.Get("User-Agent")
 
+		user, _ := common.CurrentUser(req.Context())
+
 		next.ServeHTTP(rec, req)
 
 		dur := time.Since(start)
@@ -73,6 +76,7 @@ func loggingMiddleware(logger zerolog.Logger, next http.Handler) http.Handler {
 			Int("bytes", rec.bytes).
 			Float64("duration_ms", float64(dur.Microseconds())/1000.0).
 			Str("ip", ip).
+			Str("user", user.UID).
 			Str("user_agent", ua).
 			Msg("http request")
 	})

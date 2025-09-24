@@ -185,6 +185,10 @@ func (r *Router) authenticate(req *http.Request) (*auth.Principal, error) {
 }
 
 func (r *Router) logAttempt(req *http.Request, username string, ok bool, authErr error) {
+	if ok {
+		return
+	}
+
 	ip := realIP(req)
 	ua := req.Header.Get("User-Agent")
 	authz := req.Header.Get("Authorization")
