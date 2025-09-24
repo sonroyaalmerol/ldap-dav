@@ -3,6 +3,7 @@ package caldav
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -38,6 +39,32 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 		logger:   logger,
 		basePath: cfg.HTTP.BasePath,
 		expander: ical.NewRecurrenceExpander(tz),
+	}
+}
+
+func (h *Handlers) ensurePersonalCalendar(ctx context.Context, ownerUID string) {
+	now := time.Now().UTC()
+	calURI := fmt.Sprintf("personal-%s", ownerUID)
+	cal := storage.Calendar{
+		ID:          "",
+		OwnerUserID: ownerUID,
+		OwnerGroup:  "",
+		URI:         calURI,
+		DisplayName: "Personal Calendar",
+		Description: "Personal Calendar",
+		CTag:        "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if existingCal, err := h.findCalendarByURI(ctx, calURI); err != nil || existingCal == nil {
+		if err := h.store.CreateCalendar(cal, "", "Personal Calendar"); err != nil {
+			h.logger.Error().Err(err).
+				Str("user", ownerUID).
+				Str("calendar", calURI).
+				Str("owner", ownerUID).
+				Msg("Failed to create Personal Calendar")
+		}
 	}
 }
 

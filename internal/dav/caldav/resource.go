@@ -43,6 +43,8 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	c.handlers.ensurePersonalCalendar(r.Context(), owner)
+
 	owned, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
 	if err != nil {
 		c.handlers.logger.Error().Err(err).Str("owner", owner).Msg("failed to list owned calendars in PROPFIND home")
