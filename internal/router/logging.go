@@ -53,35 +53,6 @@ func realIP(req *http.Request) string {
 	return host
 }
 
-func loggingMiddleware(logger zerolog.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: 0, wroteHeader: false}
-
-		ip := realIP(req)
-		method := req.Method
-		path := req.URL.Path
-		ua := req.Header.Get("User-Agent")
-
-		user, _ := common.CurrentUser(req.Context())
-
-		next.ServeHTTP(rec, req)
-
-		dur := time.Since(start)
-
-		logger.Info().
-			Str("method", method).
-			Str("path", path).
-			Int("status", statusOrDefault(rec.status)).
-			Int("bytes", rec.bytes).
-			Float64("duration_ms", float64(dur.Microseconds())/1000.0).
-			Str("ip", ip).
-			Str("user", user.UID).
-			Str("user_agent", ua).
-			Msg("http request")
-	})
-}
-
 func statusOrDefault(st int) int {
 	if st == 0 {
 		return http.StatusOK

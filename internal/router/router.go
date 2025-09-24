@@ -4,12 +4,14 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 var _ DAVService = (*caldav.Handlers)(nil)
@@ -48,7 +50,7 @@ func (r *Router) setupRoutes() http.Handler {
 		mux.HandleFunc(baseWithoutSlash, r.handleDAVRequest)
 	}
 
-	return loggingMiddleware(r.logger, mux)
+	return mux
 }
 
 func (r *Router) setupWellKnownRoutes(mux *http.ServeMux) {
@@ -84,13 +86,11 @@ func (r *Router) handleDAVRequest(w http.ResponseWriter, req *http.Request) {
 
 	p, err := r.authenticate(req)
 	if err != nil || p == nil {
-		r.logAttempt(req, "", false, err)
+		r.logAttempt(req, "", err)
 		w.Header().Set("WWW-Authenticate", `Basic realm="DAV", charset="UTF-8"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	r.logAttempt(req, p.UserID, true, nil)
 
 	req = req.WithContext(auth.WithPrincipal(req.Context(), p))
 
@@ -111,6 +111,16 @@ func (r *Router) buildDAVCapabilities() string {
 }
 
 func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	rec := &statusRecorder{ResponseWriter: w, status: 0, wroteHeader: false}
+
+	ip := realIP(req)
+	method := req.Method
+	path := req.URL.Path
+	ua := req.Header.Get("User-Agent")
+
+	user, _ := common.CurrentUser(req.Context())
+
 	// Determine service type based on path or content-type
 	serviceName := r.determineServiceType(req)
 	service, exists := r.services[serviceName]
@@ -142,6 +152,24 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+
+	dur := time.Since(start)
+
+	logTmp := r.logger.Info().
+		Str("method", method).
+		Str("path", path).
+		Int("status", statusOrDefault(rec.status)).
+		Int("bytes", rec.bytes).
+		Float64("duration_ms", float64(dur.Microseconds())/1000.0).
+		Str("ip", ip).
+		Str("user_agent", ua)
+
+	if user != nil {
+		logTmp = logTmp.Str("user", user.UID)
+	}
+
+	logTmp.
+		Msg("http request")
 }
 
 func (r *Router) determineServiceType(req *http.Request) string {
@@ -184,11 +212,7 @@ func (r *Router) authenticate(req *http.Request) (*auth.Principal, error) {
 	return nil, errors.New("no auth")
 }
 
-func (r *Router) logAttempt(req *http.Request, username string, ok bool, authErr error) {
-	if ok {
-		return
-	}
-
+func (r *Router) logAttempt(req *http.Request, username string, authErr error) {
 	ip := realIP(req)
 	ua := req.Header.Get("User-Agent")
 	authz := req.Header.Get("Authorization")
@@ -198,7 +222,7 @@ func (r *Router) logAttempt(req *http.Request, username string, ok bool, authErr
 	}
 
 	logEvent := r.logger.Info().
-		Bool("auth_success", ok).
+		Bool("auth_success", false).
 		Str("user", username).
 		Str("method", req.Method).
 		Str("path", req.URL.Path).
