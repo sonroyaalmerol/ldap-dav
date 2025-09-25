@@ -1,3 +1,12 @@
+-- Create the updated_at trigger function
+CREATE OR REPLACE FUNCTION updated_at_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Scheduling inbox messages table
 CREATE TABLE scheduling_inbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
