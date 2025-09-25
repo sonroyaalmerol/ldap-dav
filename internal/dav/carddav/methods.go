@@ -14,7 +14,7 @@ import (
 )
 
 func (h *Handlers) GetCapabilities() string {
-	return "addressbook-access"
+	return "addressbook"
 }
 
 func (h *Handlers) HandleHead(w http.ResponseWriter, r *http.Request) {
