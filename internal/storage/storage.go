@@ -84,7 +84,6 @@ type Store interface {
 	DeleteAddressbook(ownerUserID, abURI string) error
 	GetAddressbookByID(ctx context.Context, id string) (*Addressbook, error)
 	UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abURI string, displayName *string) error
-	UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, color string) error
 	ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*Addressbook, error)
 	ListAllAddressbooks(ctx context.Context) ([]*Addressbook, error)
 

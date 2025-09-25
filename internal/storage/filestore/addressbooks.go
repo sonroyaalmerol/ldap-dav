@@ -138,42 +138,6 @@ func (s *Store) UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abUR
 	return fs.ErrNotExist
 }
 
-func (s *Store) UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, color string) error {
-	base := filepath.Join(s.root, "addressbooks")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return err
-	}
-	for _, ent := range entries {
-		if !ent.IsDir() {
-			continue
-		}
-		id := ent.Name()
-		metaPath := s.addressbookMetaPath(id)
-		var meta addressbookMeta
-		if err := readJSON(metaPath, &meta); err != nil {
-			continue
-		}
-		if meta.OwnerUserID == ownerUID && meta.URI == abURI {
-			// ensure directory exists (optional)
-			dir := s.addressbookDir(id)
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return err
-			}
-			return s.withAddressbookLock(id, func() error {
-				// reload to avoid TOCTOU
-				if err := readJSON(metaPath, &meta); err != nil {
-					return err
-				}
-				meta.UpdatedAt = time.Now().UTC()
-				meta.CTag = randID()
-				return writeJSON(metaPath, &meta)
-			})
-		}
-	}
-	return fs.ErrNotExist
-}
-
 func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*storage.Addressbook, error) {
 	all, err := s.ListAllAddressbooks(ctx)
 	if err != nil {
