@@ -165,7 +165,6 @@ func (s *Store) UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, col
 				if err := readJSON(metaPath, &meta); err != nil {
 					return err
 				}
-				meta.Color = color
 				meta.UpdatedAt = time.Now().UTC()
 				meta.CTag = randID()
 				return writeJSON(metaPath, &meta)
