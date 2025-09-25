@@ -119,11 +119,21 @@ func Load() (*Config, error) {
 		return n
 	}()
 
+	maxVCF := func() int64 {
+		v := getenv("HTTP_MAX_VCF_BYTES", "1048576")
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 1 << 20
+		}
+		return n
+	}()
+
 	return &Config{
 		HTTP: HTTPConfig{
 			Addr:        getenv("HTTP_ADDR", ":8080"),
 			BasePath:    getenv("HTTP_BASE_PATH", "/dav"),
 			MaxICSBytes: maxICS,
+			MaxVCFBytes: maxVCF,
 		},
 		LDAP: LDAPConfig{
 			URL:                getenv("LDAP_URL", "ldap://localhost:389"),
