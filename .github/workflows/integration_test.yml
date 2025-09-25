@@ -75,7 +75,7 @@ jobs:
       - name: Load CalDAV schema
         run: |
           LDAP_CID=$(docker ps -q --filter "ancestor=osixia/openldap:1.5.0")
-          docker cp deploy/ldap/caldav-schema.ldif $LDAP_CID:/tmp/caldav-schema.ldif
+          docker cp test/fixtures/ldap/caldav-schema.ldif $LDAP_CID:/tmp/caldav-schema.ldif
           docker exec $LDAP_CID ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/caldav-schema.ldif || true
 
       - name: Seed OpenLDAP base data (idempotent)
@@ -93,7 +93,7 @@ jobs:
             -H ldap://127.0.0.1:389 \
             -D "cn=admin,dc=example,dc=com" \
             -w admin \
-            -f deploy/ldap/base.ldif || true
+            -f test/fixtures/ldap/base.ldif || true
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -124,7 +124,7 @@ jobs:
             ldap-dav-test \
             ldap-dav-bootstrap -owner bob -uri team -display "Team Calendar"
 
-      - name: Run integration tests (postgres backend)
+      - name: Run CalDAV integration tests (postgres backend)
         env:
           STORAGE_TYPE: postgres
           PG_URL: postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable
@@ -151,7 +151,36 @@ jobs:
             -e HTTP_BASE_PATH \
             -e HTTP_ADDR \
             ldap-dav-test \
-            go test ./test/integration -v -run TestIntegration
+            go test ./test/integration -v -run TestCalDAVIntegration
+
+      - name: Run CardDAV integration tests (postgres backend)
+        env:
+          STORAGE_TYPE: postgres
+          PG_URL: postgres://postgres:postgres@127.0.0.1:5432/caldav?sslmode=disable
+          LDAP_URL: ldap://127.0.0.1:389
+          LDAP_BIND_DN: cn=admin,dc=example,dc=com
+          LDAP_BIND_PASSWORD: admin
+          LDAP_USER_BASE_DN: ou=People,dc=example,dc=com
+          LDAP_GROUP_BASE_DN: ou=Groups,dc=example,dc=com
+          AUTH_BASIC: "true"
+          AUTH_BEARER: "false"
+          HTTP_BASE_PATH: /dav
+          HTTP_ADDR: :8081
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE \
+            -e PG_URL \
+            -e LDAP_URL \
+            -e LDAP_BIND_DN \
+            -e LDAP_BIND_PASSWORD \
+            -e LDAP_USER_BASE_DN \
+            -e LDAP_GROUP_BASE_DN \
+            -e AUTH_BASIC \
+            -e AUTH_BEARER \
+            -e HTTP_BASE_PATH \
+            -e HTTP_ADDR \
+            ldap-dav-test \
+            go test ./test/integration -v -run TestCardDAVIntegration
 
       - name: Bootstrap calendars (filestore)
         run: |
@@ -170,7 +199,7 @@ jobs:
             ldap-dav-test \
             ldap-dav-bootstrap -owner bob -uri team -display "Team Calendar"
 
-      - name: Run integration tests (filestore backend)
+      - name: Run CalDAV integration tests (filestore backend)
         env:
           STORAGE_TYPE: filestore
           FILE_ROOT: /tmp/ldap-dav-data
@@ -198,4 +227,34 @@ jobs:
             -e HTTP_ADDR \
             -v /tmp/ldap-dav-data:/tmp/ldap-dav-data \
             ldap-dav-test \
-            go test ./test/integration -v -run TestIntegration
+            go test ./test/integration -v -run TestCalDAVIntegration
+
+      - name: Run CardDAV integration tests (filestore backend)
+        env:
+          STORAGE_TYPE: filestore
+          FILE_ROOT: /tmp/ldap-dav-data
+          LDAP_URL: ldap://127.0.0.1:389
+          LDAP_BIND_DN: cn=admin,dc=example,dc=com
+          LDAP_BIND_PASSWORD: admin
+          LDAP_USER_BASE_DN: ou=People,dc=example,dc=com
+          LDAP_GROUP_BASE_DN: ou=Groups,dc=example,dc=com
+          AUTH_BASIC: "true"
+          AUTH_BEARER: "false"
+          HTTP_BASE_PATH: /dav
+          HTTP_ADDR: :8082
+        run: |
+          docker run --rm --network host \
+            -e STORAGE_TYPE \
+            -e FILE_ROOT \
+            -e LDAP_URL \
+            -e LDAP_BIND_DN \
+            -e LDAP_BIND_PASSWORD \
+            -e LDAP_USER_BASE_DN \
+            -e LDAP_GROUP_BASE_DN \
+            -e AUTH_BASIC \
+            -e AUTH_BEARER \
+            -e HTTP_BASE_PATH \
+            -e HTTP_ADDR \
+            -v /tmp/ldap-dav-data:/tmp/ldap-dav-data \
+            ldap-dav-test \
+            go test ./test/integration -v -run TestCardDAVIntegration

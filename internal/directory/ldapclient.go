@@ -25,13 +25,18 @@ type Directory interface {
 	LookupUserByAttr(ctx context.Context, attr, value string) (*User, error)
 	UserGroupsACL(ctx context.Context, user *User) ([]GroupACL, error)
 	IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error)
+
+	ListAddressbooks(ctx context.Context) ([]Addressbook, error)
+	GetAddressbookContacts(ctx context.Context, user *User, addressbookID string) ([]Contact, error)
+	GetContact(ctx context.Context, user *User, addressbookID, contactID string) (*Contact, error)
 }
 
 type LDAPClient struct {
-	cfg    config.LDAPConfig
-	logger zerolog.Logger
-	conn   *ldap.Conn
-	cache  *cache.Cache[string, []GroupACL]
+	cfg          config.LDAPConfig
+	logger       zerolog.Logger
+	conn         *ldap.Conn
+	cache        *cache.Cache[string, []GroupACL]
+	contactCache *cache.Cache[string, []Contact]
 }
 
 func NewLDAPClient(cfg config.LDAPConfig, logger zerolog.Logger) (*LDAPClient, error) {
@@ -47,8 +52,15 @@ func NewLDAPClient(cfg config.LDAPConfig, logger zerolog.Logger) (*LDAPClient, e
 			return nil, err
 		}
 	}
-	c := cache.New[string, []GroupACL](cfg.CacheTTL)
-	return &LDAPClient{cfg: cfg, logger: logger, conn: l, cache: c}, nil
+	aclCache := cache.New[string, []GroupACL](cfg.CacheTTL)
+	contactCache := cache.New[string, []Contact](cfg.CacheTTL)
+	return &LDAPClient{
+		cfg:          cfg,
+		logger:       logger,
+		conn:         l,
+		cache:        aclCache,
+		contactCache: contactCache,
+	}, nil
 }
 
 func (l *LDAPClient) Close() {
@@ -205,6 +217,184 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 
 	username := strings.SplitN(out.Sub, "@", 2)[0]
 	return out.Active, username, nil
+}
+
+func (l *LDAPClient) ListAddressbooks(ctx context.Context) ([]Addressbook, error) {
+	var addressbooks []Addressbook
+
+	for i, filter := range l.cfg.AddressbookFilters {
+		if !filter.Enabled {
+			continue
+		}
+
+		addressbooks = append(addressbooks, Addressbook{
+			ID:          fmt.Sprintf("ldap_%d", i),
+			Name:        filter.Name,
+			Description: filter.Description,
+			Enabled:     filter.Enabled,
+		})
+	}
+
+	return addressbooks, nil
+}
+
+func (l *LDAPClient) GetAddressbookContacts(ctx context.Context, user *User, addressbookID string) ([]Contact, error) {
+	var filterIndex int
+	if _, err := fmt.Sscanf(addressbookID, "ldap_%d", &filterIndex); err != nil {
+		return nil, fmt.Errorf("invalid addressbook ID: %s", addressbookID)
+	}
+
+	if filterIndex >= len(l.cfg.AddressbookFilters) {
+		return nil, fmt.Errorf("addressbook not found: %s", addressbookID)
+	}
+
+	filter := l.cfg.AddressbookFilters[filterIndex]
+	if !filter.Enabled {
+		return nil, fmt.Errorf("addressbook disabled: %s", addressbookID)
+	}
+
+	cacheKey := fmt.Sprintf("%s:%s", user.DN, addressbookID)
+	if contacts, ok := l.contactCache.Get(cacheKey); ok {
+		return contacts, nil
+	}
+
+	searchReq := ldap.NewSearchRequest(
+		filter.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(l.cfg.Timeout.Seconds()), false,
+		filter.Filter,
+		contactAttrList(),
+		nil,
+	)
+
+	res, err := l.conn.Search(searchReq)
+	if err != nil {
+		l.logger.Error().Err(err).
+			Str("base_dn", filter.BaseDN).
+			Str("filter", filter.Filter).
+			Str("addressbook_id", addressbookID).
+			Msg("LDAP search failed in GetAddressbookContacts")
+		return nil, err
+	}
+
+	var contacts []Contact
+	for _, entry := range res.Entries {
+		contact := l.ldapEntryToContact(entry)
+		contacts = append(contacts, contact)
+	}
+
+	l.contactCache.Set(cacheKey, contacts, time.Now().Add(l.cfg.CacheTTL))
+
+	return contacts, nil
+}
+
+func (l *LDAPClient) GetContact(ctx context.Context, user *User, addressbookID, contactID string) (*Contact, error) {
+	var filterIndex int
+	if _, err := fmt.Sscanf(addressbookID, "ldap_%d", &filterIndex); err != nil {
+		return nil, fmt.Errorf("invalid addressbook ID: %s", addressbookID)
+	}
+
+	if filterIndex >= len(l.cfg.AddressbookFilters) {
+		return nil, fmt.Errorf("addressbook not found: %s", addressbookID)
+	}
+
+	filter := l.cfg.AddressbookFilters[filterIndex]
+	if !filter.Enabled {
+		return nil, fmt.Errorf("addressbook disabled: %s", addressbookID)
+	}
+
+	searchFilter := fmt.Sprintf("(&%s(|(uid=%s)(cn=%s)))", filter.Filter, ldap.EscapeFilter(contactID), ldap.EscapeFilter(contactID))
+	searchReq := ldap.NewSearchRequest(
+		filter.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
+		searchFilter,
+		contactAttrList(),
+		nil,
+	)
+
+	res, err := l.conn.Search(searchReq)
+	if err != nil {
+		l.logger.Error().Err(err).
+			Str("base_dn", filter.BaseDN).
+			Str("filter", searchFilter).
+			Str("contact_id", contactID).
+			Msg("LDAP search failed in GetContact")
+		return nil, err
+	}
+
+	if len(res.Entries) == 0 {
+		return nil, fmt.Errorf("contact not found: %s", contactID)
+	}
+
+	contact := l.ldapEntryToContact(res.Entries[0])
+	return &contact, nil
+}
+
+func (l *LDAPClient) ldapEntryToContact(entry *ldap.Entry) Contact {
+	contact := Contact{
+		ID:           firstNonEmpty(entry.GetAttributeValue("uid"), entry.GetAttributeValue("cn")),
+		DN:           entry.DN,
+		DisplayName:  firstNonEmpty(entry.GetAttributeValue("displayName"), entry.GetAttributeValue("cn")),
+		FirstName:    entry.GetAttributeValue("givenName"),
+		LastName:     entry.GetAttributeValue("sn"),
+		Email:        entry.GetAttributeValues("mail"),
+		Phone:        append(entry.GetAttributeValues("telephoneNumber"), entry.GetAttributeValues("mobile")...),
+		Organization: entry.GetAttributeValue("o"),
+		Title:        entry.GetAttributeValue("title"),
+	}
+
+	contact.VCardData = l.generateVCard(contact)
+
+	return contact
+}
+
+func (l *LDAPClient) generateVCard(contact Contact) string {
+	var vcard strings.Builder
+
+	vcard.WriteString("BEGIN:VCARD\r\n")
+	vcard.WriteString("VERSION:3.0\r\n")
+
+	if contact.DisplayName != "" {
+		vcard.WriteString(fmt.Sprintf("FN:%s\r\n", contact.DisplayName))
+	}
+
+	if contact.FirstName != "" || contact.LastName != "" {
+		vcard.WriteString(fmt.Sprintf("N:%s;%s;;;\r\n", contact.LastName, contact.FirstName))
+	}
+
+	for _, email := range contact.Email {
+		if email != "" {
+			vcard.WriteString(fmt.Sprintf("EMAIL:%s\r\n", email))
+		}
+	}
+
+	for _, phone := range contact.Phone {
+		if phone != "" {
+			vcard.WriteString(fmt.Sprintf("TEL:%s\r\n", phone))
+		}
+	}
+
+	if contact.Organization != "" {
+		vcard.WriteString(fmt.Sprintf("ORG:%s\r\n", contact.Organization))
+	}
+
+	if contact.Title != "" {
+		vcard.WriteString(fmt.Sprintf("TITLE:%s\r\n", contact.Title))
+	}
+
+	if contact.ID != "" {
+		vcard.WriteString(fmt.Sprintf("UID:%s\r\n", contact.ID))
+	}
+
+	vcard.WriteString("END:VCARD\r\n")
+
+	return vcard.String()
+}
+
+func contactAttrList() []string {
+	return []string{
+		"dn", "uid", "cn", "displayName", "givenName", "sn",
+		"mail", "telephoneNumber", "mobile", "o", "title",
+	}
 }
 
 func privilegesFromList(calID string, privs []string) GroupACL {

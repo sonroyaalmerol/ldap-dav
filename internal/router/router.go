@@ -11,10 +11,12 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/carddav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 var _ DAVService = (*caldav.Handlers)(nil)
+var _ DAVService = (*carddav.Handlers)(nil)
 
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger zerolog.Logger) http.Handler {
 	r := &Router{
@@ -26,7 +28,7 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger zerolog.
 	}
 
 	r.RegisterService("caldav", &h.CalDAVHandlers)
-	// r.RegisterService("carddav", &h.CardDAVHandlers)
+	r.RegisterService("carddav", &h.CardDAVHandlers)
 
 	return r.setupRoutes()
 }
@@ -55,7 +57,7 @@ func (r *Router) setupRoutes() http.Handler {
 
 func (r *Router) setupWellKnownRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/.well-known/caldav", r.handlers.HandleWellKnown)
-	// mux.HandleFunc("/.well-known/carddav", r.handlers.HandleCardDAVWellKnown)
+	mux.HandleFunc("/.well-known/carddav", r.handlers.HandleWellKnown)
 }
 
 func (r *Router) getBasePath() string {
@@ -132,25 +134,25 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 
 	switch req.Method {
 	case "PROPFIND":
-		r.handlers.HandlePropfind(w, req)
+		r.handlers.HandlePropfind(rec, req)
 	case "REPORT":
-		service.HandleReport(w, req)
+		service.HandleReport(rec, req)
 	case http.MethodGet:
-		service.HandleGet(w, req)
+		service.HandleGet(rec, req)
 	case http.MethodHead:
-		service.HandleHead(w, req)
+		service.HandleHead(rec, req)
 	case http.MethodPut:
-		service.HandlePut(w, req)
+		service.HandlePut(rec, req)
 	case http.MethodDelete:
-		service.HandleDelete(w, req)
+		service.HandleDelete(rec, req)
 	case "MKCOL":
-		service.HandleMkcol(w, req)
+		service.HandleMkcol(rec, req)
 	case "MKCALENDAR":
-		service.HandleMkcalendar(w, req)
+		service.HandleMkcalendar(rec, req)
 	case "PROPPATCH":
-		service.HandleProppatch(w, req)
+		service.HandleProppatch(rec, req)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(rec, "method not allowed", http.StatusMethodNotAllowed)
 	}
 
 	dur := time.Since(start)

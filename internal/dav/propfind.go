@@ -102,6 +102,9 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ s
 	if err := resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode CalendarHomeSet property")
 	}
+	if err := resp.EncodeProp(http.StatusOK, common.AddressBookHomeSet{Hrefs: []common.Href{{Value: common.AddressbookHome(h.basePath, u.UID)}}}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode AddressbookHomeSet property")
+	}
 	if err := resp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: principal-URL"`
 		Href    common.Href

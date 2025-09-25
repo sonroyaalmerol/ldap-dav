@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	NSDAV    = "DAV:"
-	NSCalDAV = "urn:ietf:params:xml:ns:caldav"
-	NSCS     = "http://calendarserver.org/ns/"
+	NSDAV     = "DAV:"
+	NSCalDAV  = "urn:ietf:params:xml:ns:caldav"
+	NSCardDAV = "urn:ietf:params:xml:ns:carddav"
+	NSCS      = "http://calendarserver.org/ns/"
 )
 
 type Status struct {
@@ -153,15 +154,27 @@ type PrincipalCollectionSet struct {
 }
 
 type ResourceType struct {
-	XMLName    xml.Name  `xml:"DAV: resourcetype"`
-	Collection *struct{} `xml:"DAV: collection,omitempty"`
-	Principal  *struct{} `xml:"DAV: principal,omitempty"`
-	Calendar   *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar,omitempty"`
+	XMLName     xml.Name  `xml:"DAV: resourcetype"`
+	Collection  *struct{} `xml:"DAV: collection,omitempty"`
+	Principal   *struct{} `xml:"DAV: principal,omitempty"`
+	Calendar    *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar,omitempty"`
+	Addressbook *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook,omitempty"`
 }
 
 type SupportedCalData struct {
 	XMLName     xml.Name `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-data"`
 	ContentType string   `xml:"content-type,attr"`
+	Version     string   `xml:"version,attr,omitempty"`
+}
+
+type SupportedAddressData struct {
+	XMLName         xml.Name          `xml:"urn:ietf:params:xml:ns:carddav supported-address-data"`
+	AddressDataType []AddressDataType `xml:"address-data-type"`
+}
+
+type AddressDataType struct {
+	XMLName     xml.Name `xml:"urn:ietf:params:xml:ns:carddav address-data-type"`
+	ContentType string   `xml:"content-type,attr,omitempty"`
 	Version     string   `xml:"version,attr,omitempty"`
 }
 
@@ -266,6 +279,11 @@ type CalendarHomeSet struct {
 	Hrefs   []Href   `xml:"href,omitempty"`
 }
 
+type AddressBookHomeSet struct {
+	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set"`
+	Hrefs   []Href   `xml:"href,omitempty"`
+}
+
 type SupportedReportSet struct {
 	XMLName         xml.Name          `xml:"DAV: supported-report-set"`
 	SupportedReport []SupportedReport `xml:"DAV: supported-report"`
@@ -277,16 +295,19 @@ type SupportedReport struct {
 }
 
 type ReportType struct {
-	XMLName          xml.Name  `xml:"DAV: report"`
-	CalendarQuery    *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-query,omitempty"`
-	CalendarMultiget *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-multiget,omitempty"`
-	FreeBusyQuery    *struct{} `xml:"urn:ietf:params:xml:ns:caldav free-busy-query,omitempty"`
-	SyncCollection   *struct{} `xml:"DAV: sync-collection,omitempty"`
+	XMLName             xml.Name  `xml:"DAV: report"`
+	CalendarQuery       *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-query,omitempty"`
+	CalendarMultiget    *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar-multiget,omitempty"`
+	FreeBusyQuery       *struct{} `xml:"urn:ietf:params:xml:ns:caldav free-busy-query,omitempty"`
+	SyncCollection      *struct{} `xml:"DAV: sync-collection,omitempty"`
+	AddressbookQuery    *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook-query,omitempty"`
+	AddressbookMultiget *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook-multiget,omitempty"`
 }
 
 type PropRequest struct {
 	GetETag      bool
 	CalendarData bool
+	AddressData  bool
 }
 
 type PropContainer struct {
@@ -417,4 +438,44 @@ type CurrentUserPrincipal struct {
 	XMLName         xml.Name  `xml:"DAV: current-user-principal"`
 	Href            *Href     `xml:"href,omitempty"`
 	Unauthenticated *struct{} `xml:"unauthenticated,omitempty"`
+}
+
+// CardDAV
+
+type AddressbookQuery struct {
+	XMLName xml.Name          `xml:"urn:ietf:params:xml:ns:carddav addressbook-query"`
+	Prop    PropContainer     `xml:"DAV: prop"`
+	Filter  AddressbookFilter `xml:"urn:ietf:params:xml:ns:carddav filter,omitempty"`
+}
+
+type AddressbookMultiget struct {
+	XMLName xml.Name      `xml:"urn:ietf:params:xml:ns:carddav addressbook-multiget"`
+	Prop    PropContainer `xml:"DAV: prop"`
+	Hrefs   []string      `xml:"DAV: href"`
+}
+
+type AddressbookFilter struct {
+	XMLName     xml.Name     `xml:"urn:ietf:params:xml:ns:carddav filter"`
+	PropFilters []PropFilter `xml:"prop-filter"`
+}
+
+type PropFilter struct {
+	XMLName      xml.Name      `xml:"urn:ietf:params:xml:ns:carddav prop-filter"`
+	Name         string        `xml:"name,attr"`
+	TextMatch    *TextMatch    `xml:"text-match,omitempty"`
+	ParamFilters []ParamFilter `xml:"param-filter"`
+}
+
+type ParamFilter struct {
+	XMLName   xml.Name   `xml:"urn:ietf:params:xml:ns:carddav param-filter"`
+	Name      string     `xml:"name,attr"`
+	TextMatch *TextMatch `xml:"text-match,omitempty"`
+}
+
+type TextMatch struct {
+	XMLName   xml.Name `xml:"urn:ietf:params:xml:ns:carddav text-match"`
+	MatchType string   `xml:"match-type,attr,omitempty"` // "contains", "equals", etc.
+	Collation string   `xml:"collation,attr,omitempty"`
+	Negate    string   `xml:"negate-condition,attr,omitempty"` // "yes"|"no"
+	Text      string   `xml:",chardata"`
 }

@@ -8,10 +8,10 @@ services:
       LDAP_ADMIN_PASSWORD: admin
     ports:
       - "389:389"
-    volumes:
+    #volumes:
       # Custom schema + base data
-      - ./deploy/ldap/caldav-schema.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-caldav-schema.ldif:ro
-      - ./deploy/ldap/base.ldif:/container/service/slapd/assets/config/bootstrap/ldif/60-base.ldif:ro
+      #- ./test/fixtures/ldap/caldav-schema.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-caldav-schema.ldif:ro
+      #- ./test/fixtures/ldap/base.ldif:/container/service/slapd/assets/config/bootstrap/ldif/60-base.ldif:ro
     healthcheck:
       test: ["CMD", "ldapwhoami", "-x", "-H", "ldap://localhost:389", "-D", "cn=admin,dc=example,dc=com", "-w", "admin"]
       interval: 5s

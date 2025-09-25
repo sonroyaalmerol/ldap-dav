@@ -1,5 +1,25 @@
 package directory
 
+type Addressbook struct {
+	ID          string
+	Name        string
+	Description string
+	Enabled     bool
+}
+
+type Contact struct {
+	ID           string
+	DN           string
+	DisplayName  string
+	FirstName    string
+	LastName     string
+	Email        []string
+	Phone        []string
+	Organization string
+	Title        string
+	VCardData    string // Raw vCard data
+}
+
 type User struct {
 	UID         string
 	DN          string

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -10,6 +11,15 @@ type HTTPConfig struct {
 	Addr        string
 	BasePath    string
 	MaxICSBytes int64
+	MaxVCFBytes int64
+}
+
+type LDAPAddressbookFilter struct {
+	Name        string
+	BaseDN      string
+	Filter      string
+	Enabled     bool
+	Description string
 }
 
 type LDAPConfig struct {
@@ -31,6 +41,7 @@ type LDAPConfig struct {
 	CacheTTL           time.Duration
 	InsecureSkipVerify bool
 	RequireTLS         bool
+	AddressbookFilters []LDAPAddressbookFilter
 }
 
 type AuthConfig struct {
@@ -67,9 +78,49 @@ func getenv(key, def string) string {
 	return def
 }
 
+func loadAddressbookFilters() []LDAPAddressbookFilter {
+	var filters []LDAPAddressbookFilter
+
+	// Look for LDAP_ADDRESSBOOK_FILTER_0, LDAP_ADDRESSBOOK_FILTER_1, etc.
+	for i := 0; i < 100; i++ { // reasonable limit to prevent infinite loop
+		prefix := fmt.Sprintf("LDAP_ADDRESSBOOK_FILTER_%d", i)
+
+		if os.Getenv(prefix) == "" && os.Getenv(prefix+"_NAME") == "" {
+			if len(filters) == 0 {
+				continue
+			}
+			break
+		}
+
+		filter := LDAPAddressbookFilter{
+			Name:        getenv(prefix+"_NAME", fmt.Sprintf("Addressbook_%d", i)),
+			BaseDN:      getenv(prefix+"_BASE_DN", getenv("LDAP_USER_BASE_DN", "")),
+			Filter:      getenv(prefix+"_FILTER", "(objectClass=person)"),
+			Enabled:     getenv(prefix+"_ENABLED", "true") == "true",
+			Description: getenv(prefix+"_DESCRIPTION", ""),
+		}
+
+		// If NAME or BASE_DN is explicitly set, or if the base var exists, include this filter
+		if os.Getenv(prefix+"_NAME") != "" || os.Getenv(prefix+"_BASE_DN") != "" || os.Getenv(prefix) != "" {
+			filters = append(filters, filter)
+		}
+	}
+
+	return filters
+}
+
 func Load() (*Config, error) {
 	maxICS := func() int64 {
 		v := getenv("HTTP_MAX_ICS_BYTES", "1048576")
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 1 << 20
+		}
+		return n
+	}()
+
+	maxVCF := func() int64 {
+		v := getenv("HTTP_MAX_VCF_BYTES", "1048576")
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return 1 << 20
@@ -82,6 +133,7 @@ func Load() (*Config, error) {
 			Addr:        getenv("HTTP_ADDR", ":8080"),
 			BasePath:    getenv("HTTP_BASE_PATH", "/dav"),
 			MaxICSBytes: maxICS,
+			MaxVCFBytes: maxVCF,
 		},
 		LDAP: LDAPConfig{
 			URL:                getenv("LDAP_URL", "ldap://localhost:389"),
@@ -102,6 +154,7 @@ func Load() (*Config, error) {
 			MaxGroupDepth:      3,
 			Timeout:            5 * time.Second,
 			CacheTTL:           60 * time.Second,
+			AddressbookFilters: loadAddressbookFilters(),
 		},
 		Auth: AuthConfig{
 			EnableBasic:          getenv("AUTH_BASIC", "true") == "true",

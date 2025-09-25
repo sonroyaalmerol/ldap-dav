@@ -37,7 +37,7 @@ func basicAuth(user, pass string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 }
 
-func TestIntegration(t *testing.T) {
+func TestCalDAVIntegration(t *testing.T) {
 	t.Parallel()
 	// Env-driven config for server
 	httpAddr := os.Getenv("HTTP_ADDR")

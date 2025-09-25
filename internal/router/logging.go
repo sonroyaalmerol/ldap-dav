@@ -13,20 +13,20 @@ type statusRecorder struct {
 	bytes       int
 }
 
-func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
-		r.status = code
-		r.wroteHeader = true
-		r.ResponseWriter.WriteHeader(code)
+func (rec *statusRecorder) WriteHeader(code int) {
+	if !rec.wroteHeader {
+		rec.status = code
+		rec.wroteHeader = true
 	}
+	rec.ResponseWriter.WriteHeader(code)
 }
 
-func (r *statusRecorder) Write(p []byte) (int, error) {
-	if !r.wroteHeader {
-		r.WriteHeader(http.StatusOK)
+func (rec *statusRecorder) Write(data []byte) (int, error) {
+	if !rec.wroteHeader {
+		rec.WriteHeader(http.StatusOK)
 	}
-	n, err := r.ResponseWriter.Write(p)
-	r.bytes += n
+	n, err := rec.ResponseWriter.Write(data)
+	rec.bytes += n
 	return n, err
 }
 
