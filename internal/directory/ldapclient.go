@@ -258,6 +258,10 @@ func (l *LDAPClient) GetAddressbookContacts(ctx context.Context, user *User, add
 		return contacts, nil
 	}
 
+	if filter.BaseDN == "" {
+		filter.BaseDN = l.cfg.UserBaseDN
+	}
+
 	searchReq := ldap.NewSearchRequest(
 		filter.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(l.cfg.Timeout.Seconds()), false,
@@ -300,6 +304,10 @@ func (l *LDAPClient) GetContact(ctx context.Context, user *User, addressbookID, 
 	filter := l.cfg.AddressbookFilters[filterIndex]
 	if !filter.Enabled {
 		return nil, fmt.Errorf("addressbook disabled: %s", addressbookID)
+	}
+
+	if filter.BaseDN == "" {
+		filter.BaseDN = l.cfg.UserBaseDN
 	}
 
 	searchFilter := fmt.Sprintf("(&%s(|(uid=%s)(cn=%s)))", filter.Filter, ldap.EscapeFilter(contactID), ldap.EscapeFilter(contactID))
