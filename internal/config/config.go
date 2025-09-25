@@ -94,7 +94,7 @@ func loadAddressbookFilters() []LDAPAddressbookFilter {
 
 		filter := LDAPAddressbookFilter{
 			Name:        getenv(prefix+"_NAME", fmt.Sprintf("Addressbook_%d", i)),
-			BaseDN:      getenv(prefix+"_BASE_DN", ""),
+			BaseDN:      getenv(prefix+"_BASE_DN", getenv("LDAP_USER_BASE_DN", "")),
 			Filter:      getenv(prefix+"_FILTER", "(objectClass=person)"),
 			Enabled:     getenv(prefix+"_ENABLED", "true") == "true",
 			Description: getenv(prefix+"_DESCRIPTION", ""),
