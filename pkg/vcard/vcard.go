@@ -35,10 +35,6 @@ func ValidateVCard(raw []byte) error {
 	return nil
 }
 
-// NormalizeVCard parses, optionally upgrades/coerces version, ensures required
-// fields, and returns a canonical text/vcard with CRLF line endings and folded
-// lines per encoder. If targetVersion is "", preserve existing; otherwise
-// pass "3.0" or "4.0".
 func NormalizeVCard(raw []byte, targetVersion string) ([]byte, error) {
 	cards, err := parseAll(raw)
 	if err != nil {
@@ -49,14 +45,23 @@ func NormalizeVCard(raw []byte, targetVersion string) ([]byte, error) {
 	}
 
 	for _, c := range cards {
-		if c.Value(govcard.FieldFormattedName) == "" {
-			return nil, errors.New("vcard missing FN")
+		// Set version first, before other processing
+		switch targetVersion {
+		case "4.0":
+			c.SetValue(govcard.FieldVersion, "4.0")
+			govcard.ToV4(c)
+		case "3.0":
+			c.SetValue(govcard.FieldVersion, "3.0")
+			// Add v4-only field removal logic if needed
+		case "":
+			if c.Value(govcard.FieldVersion) == "" {
+				c.SetValue(govcard.FieldVersion, "3.0")
+			}
+		default:
+			return nil, errors.New("unsupported target vcard version")
 		}
 
-		if c.Value(govcard.FieldUID) == "" {
-			c.SetValue(govcard.FieldUID, uuid.NewString())
-		}
-
+		// Generate FN if missing
 		if c.Value(govcard.FieldFormattedName) == "" {
 			if name := c.Name(); name != nil {
 				fn := strings.TrimSpace(strings.Join([]string{
@@ -66,30 +71,18 @@ func NormalizeVCard(raw []byte, targetVersion string) ([]byte, error) {
 					c.SetValue(govcard.FieldFormattedName, fn)
 				}
 			}
+			// If still no FN, this is an error per RFC
+			if c.Value(govcard.FieldFormattedName) == "" {
+				return nil, errors.New("vcard missing FN and cannot generate from N")
+			}
 		}
 
-		switch targetVersion {
-		case "4.0":
-			// Upgrade to v4 (in-place)
-			govcard.ToV4(c)
-			c.SetValue(govcard.FieldVersion, "4.0")
-		case "3.0":
-			// Downgrade path: go-vcard doesn't provide ToV3; we set VERSION to 3.0
-			// and rely on encoder producing valid output. Note: some v4-only fields
-			// may remain; most clients accept superset. For strictness, strip known
-			// v4-only fields if needed.
-			c.SetValue(govcard.FieldVersion, "3.0")
-		case "":
-			// Preserve, but if missing, default to 3.0 for broad client support
-			if c.Value(govcard.FieldVersion) == "" {
-				c.SetValue(govcard.FieldVersion, "3.0")
-			}
-		default:
-			return nil, errors.New("unsupported target vcard version")
+		// Add UID if missing
+		if c.Value(govcard.FieldUID) == "" {
+			c.SetValue(govcard.FieldUID, uuid.NewString())
 		}
 	}
 
-	// Re-encode
 	var buf bytes.Buffer
 	enc := govcard.NewEncoder(&buf)
 	for _, c := range cards {

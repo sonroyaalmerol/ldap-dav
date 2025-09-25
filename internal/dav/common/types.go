@@ -279,6 +279,11 @@ type CalendarHomeSet struct {
 	Hrefs   []Href   `xml:"href,omitempty"`
 }
 
+type AddressBookHomeSet struct {
+	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set"`
+	Hrefs   []Href   `xml:"href,omitempty"`
+}
+
 type SupportedReportSet struct {
 	XMLName         xml.Name          `xml:"DAV: supported-report-set"`
 	SupportedReport []SupportedReport `xml:"DAV: supported-report"`
