@@ -52,7 +52,6 @@ type Addressbook struct {
 	URI         string
 	DisplayName string
 	Description string
-	Color       string
 	CTag        string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

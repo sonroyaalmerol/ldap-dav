@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS addressbooks (
     display_name TEXT,
     description TEXT,
     ctag TEXT NOT NULL,
-    color VARCHAR(7) DEFAULT '#3174ad',
     sync_seq BIGINT NOT NULL DEFAULT 0,
     sync_token TEXT NOT NULL DEFAULT 'seq:0',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

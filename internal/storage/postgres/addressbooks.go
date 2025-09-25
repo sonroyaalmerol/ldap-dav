@@ -17,11 +17,11 @@ func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, desc
 
 	_, err := s.pool.Exec(context.Background(), `
 		insert into addressbooks (
-			id, owner_user_id, owner_group, uri, display_name, description, color, ctag
+			id, owner_user_id, owner_group, uri, display_name, description, ctag
 		) values (
 			$1::uuid, $2, $3, $4, $5, $6, $7, $8
 		)
-	`, a.ID, a.OwnerUserID, ownerGroup, a.URI, a.DisplayName, description, a.Color, a.CTag)
+	`, a.ID, a.OwnerUserID, ownerGroup, a.URI, a.DisplayName, description, a.CTag)
 	return err
 }
 
@@ -34,10 +34,10 @@ func (s *Store) DeleteAddressbook(ownerUserID, abURI string) error {
 
 func (s *Store) GetAddressbookByID(ctx context.Context, id string) (*storage.Addressbook, error) {
 	row := s.pool.QueryRow(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
         from addressbooks where id::text = $1`, id)
 	var a storage.Addressbook
-	if err := row.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.Color, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -63,7 +63,7 @@ func (s *Store) UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, col
 
 func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*storage.Addressbook, error) {
 	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
         from addressbooks where owner_user_id = $1`, uid)
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]
 	var out []*storage.Addressbook
 	for rows.Next() {
 		var a storage.Addressbook
-		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.Color, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &a)
@@ -82,7 +82,7 @@ func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]
 
 func (s *Store) ListAllAddressbooks(ctx context.Context) ([]*storage.Addressbook, error) {
 	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
         from addressbooks`)
 	if err != nil {
 		return nil, err
@@ -91,7 +91,7 @@ func (s *Store) ListAllAddressbooks(ctx context.Context) ([]*storage.Addressbook
 	var out []*storage.Addressbook
 	for rows.Next() {
 		var a storage.Addressbook
-		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.Color, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &a)
