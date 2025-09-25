@@ -99,7 +99,6 @@ type addressbookMeta struct {
 	URI         string    `json:"uri"`
 	DisplayName string    `json:"display_name"`
 	Description string    `json:"description"`
-	Color       string    `json:"color"`
 	CTag        string    `json:"ctag"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

@@ -26,11 +26,6 @@ func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, desc
 	}
 	now := time.Now().UTC()
 
-	color := a.Color
-	if color == "" {
-		color = "#3174ad" // Default blue color
-	}
-
 	meta := addressbookMeta{
 		ID:          id,
 		OwnerUserID: a.OwnerUserID,
@@ -38,7 +33,6 @@ func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, desc
 		URI:         a.URI,
 		DisplayName: a.DisplayName,
 		Description: description,
-		Color:       color,
 		CTag:        randID(),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -97,7 +91,6 @@ func (s *Store) GetAddressbookByID(ctx context.Context, id string) (*storage.Add
 		URI:         meta.URI,
 		DisplayName: meta.DisplayName,
 		Description: meta.Description,
-		Color:       meta.Color,
 		CTag:        meta.CTag,
 		CreatedAt:   meta.CreatedAt,
 		UpdatedAt:   meta.UpdatedAt,
@@ -223,7 +216,6 @@ func (s *Store) ListAllAddressbooks(ctx context.Context) ([]*storage.Addressbook
 			URI:         meta.URI,
 			DisplayName: meta.DisplayName,
 			Description: meta.Description,
-			Color:       meta.Color,
 			CTag:        meta.CTag,
 			CreatedAt:   meta.CreatedAt,
 			UpdatedAt:   meta.UpdatedAt,
