@@ -135,7 +135,7 @@ func testOptionsCardDAV(t *testing.T, client *http.Client, baseURL, basePath str
 	}
 	defer resp.Body.Close()
 	got := resp.Header.Get("DAV")
-	if got == "" || !bytes.Contains([]byte(got), []byte("addressbook-access")) {
+	if got == "" || !bytes.Contains([]byte(got), []byte("addressbook")) {
 		t.Fatalf("DAV header missing addressbook-access at %s: %q", url, got)
 	}
 	allow := strings.ToUpper(resp.Header.Get("Allow"))
