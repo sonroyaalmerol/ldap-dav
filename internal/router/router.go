@@ -155,51 +155,29 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 
 	dur := time.Since(start)
 
-	var logTmp *zerolog.Event
-
+	var logEvent *zerolog.Event
 	switch req.Method {
-	case "PROPFIND":
-		fallthrough
-	case "REPORT":
-		fallthrough
-	case http.MethodGet:
-		fallthrough
-	case http.MethodHead:
-		logTmp = r.logger.Debug().
-			Str("method", method).
-			Str("path", path).
-			Str("service", serviceName).
-			Int("status", statusOrDefault(rec.status)).
-			Int("bytes", rec.bytes).
-			Float64("duration_ms", float64(dur.Microseconds())/1000.0).
-			Str("ip", ip).
-			Str("user_agent", ua)
-	case http.MethodPut:
-		fallthrough
-	case http.MethodDelete:
-		fallthrough
-	case "MKCOL":
-		fallthrough
-	case "MKCALENDAR":
-		fallthrough
-	case "PROPPATCH":
+	case "PROPFIND", "REPORT", http.MethodGet, http.MethodHead:
+		logEvent = r.logger.Debug()
 	default:
-		logTmp = r.logger.Info().
-			Str("method", method).
-			Str("path", path).
-			Str("service", serviceName).
-			Int("status", statusOrDefault(rec.status)).
-			Int("bytes", rec.bytes).
-			Float64("duration_ms", float64(dur.Microseconds())/1000.0).
-			Str("ip", ip).
-			Str("user_agent", ua)
+		logEvent = r.logger.Info()
 	}
+
+	logEntry := logEvent.
+		Str("method", method).
+		Str("path", path).
+		Str("service", serviceName).
+		Int("status", statusOrDefault(rec.status)).
+		Int("bytes", rec.bytes).
+		Float64("duration_ms", float64(dur.Microseconds())/1000.0).
+		Str("ip", ip).
+		Str("user_agent", ua)
 
 	if user != nil {
-		logTmp = logTmp.Str("user", user.UID)
+		logEntry = logEntry.Str("user", user.UID)
 	}
 
-	logTmp.Msg("http request")
+	logEntry.Msg("http request")
 }
 
 func (r *Router) determineServiceType(req *http.Request) string {
