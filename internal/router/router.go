@@ -134,25 +134,25 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 
 	switch req.Method {
 	case "PROPFIND":
-		r.handlers.HandlePropfind(w, req)
+		r.handlers.HandlePropfind(rec, req)
 	case "REPORT":
-		service.HandleReport(w, req)
+		service.HandleReport(rec, req)
 	case http.MethodGet:
-		service.HandleGet(w, req)
+		service.HandleGet(rec, req)
 	case http.MethodHead:
-		service.HandleHead(w, req)
+		service.HandleHead(rec, req)
 	case http.MethodPut:
-		service.HandlePut(w, req)
+		service.HandlePut(rec, req)
 	case http.MethodDelete:
-		service.HandleDelete(w, req)
+		service.HandleDelete(rec, req)
 	case "MKCOL":
-		service.HandleMkcol(w, req)
+		service.HandleMkcol(rec, req)
 	case "MKCALENDAR":
-		service.HandleMkcalendar(w, req)
+		service.HandleMkcalendar(rec, req)
 	case "PROPPATCH":
-		service.HandleProppatch(w, req)
+		service.HandleProppatch(rec, req)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(rec, "method not allowed", http.StatusMethodNotAllowed)
 	}
 
 	dur := time.Since(start)
