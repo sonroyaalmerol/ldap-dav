@@ -43,7 +43,7 @@ func (e Effective) CanUnlock() bool {
 }
 
 func (e Effective) CanReadACL() bool {
-	return e.ReadACL
+	return e.ReadACL || e.Read
 }
 
 func (e Effective) CanReadCurrentUserPrivilegeSet() bool {
