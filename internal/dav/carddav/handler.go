@@ -47,7 +47,7 @@ func (h *Handlers) ensurePersonalAddressbook(ctx context.Context, ownerUID strin
 		CTag:        "",
 	}
 
-	if existingAB, err := h.findAddressbookByURI(ctx, abURI); err != nil || existingAB == nil {
+	if existingAB, err := h.findAddressbookByURI(ctx, abURI, ownerUID); err != nil || existingAB == nil {
 		if err := h.store.CreateAddressbook(ab, "", "Personal Addressbook"); err != nil {
 			h.logger.Error().Err(err).
 				Str("user", ownerUID).
@@ -110,7 +110,7 @@ func (h *Handlers) resolveAddressbook(ctx context.Context, owner, abURI string) 
 		if ab, err := h.loadAddressbookByOwnerURI(ctx, owner, abURI); err == nil && ab != nil {
 			return ab.ID, owner, nil
 		}
-		if ab, err := h.findAddressbookByURI(ctx, abURI); err == nil && ab != nil {
+		if ab, err := h.findAddressbookByURI(ctx, abURI, owner); err == nil && ab != nil {
 			return ab.ID, ab.OwnerUserID, nil
 		}
 	}
@@ -121,7 +121,30 @@ func (h *Handlers) resolveAddressbook(ctx context.Context, owner, abURI string) 
 	return "", "", errors.New("addressbook not found")
 }
 
-func (h *Handlers) findAddressbookByURI(ctx context.Context, uri string) (*storage.Addressbook, error) {
+func (h *Handlers) findAddressbookByURI(ctx context.Context, uri, requester string) (*storage.Addressbook, error) {
+	if strings.HasPrefix(uri, "ldap_") {
+		ldapAll, err := h.dir.ListAddressbooks(ctx)
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("addressbook", uri).
+				Msg("failed to list all addressbooks from ldap")
+			return nil, err
+		}
+
+		for _, ab := range ldapAll {
+			if ab.ID == uri && ab.Enabled {
+				return &storage.Addressbook{
+					ID:          uri,
+					OwnerUserID: requester,
+					OwnerGroup:  "",
+					URI:         uri,
+					DisplayName: ab.Name,
+					Description: ab.Description,
+				}, nil
+			}
+		}
+	}
+
 	all, err := h.store.ListAllAddressbooks(ctx)
 	if err != nil {
 		h.logger.Error().Err(err).

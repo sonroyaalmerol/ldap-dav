@@ -26,7 +26,7 @@ type Directory interface {
 	UserGroupsACL(ctx context.Context, user *User) ([]GroupACL, error)
 	IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error)
 
-	ListAddressbooks(ctx context.Context, user *User) ([]Addressbook, error)
+	ListAddressbooks(ctx context.Context) ([]Addressbook, error)
 	GetAddressbookContacts(ctx context.Context, user *User, addressbookID string) ([]Contact, error)
 	GetContact(ctx context.Context, user *User, addressbookID, contactID string) (*Contact, error)
 }
@@ -219,7 +219,7 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 	return out.Active, username, nil
 }
 
-func (l *LDAPClient) ListAddressbooks(ctx context.Context, user *User) ([]Addressbook, error) {
+func (l *LDAPClient) ListAddressbooks(ctx context.Context) ([]Addressbook, error) {
 	var addressbooks []Addressbook
 
 	for i, filter := range l.cfg.AddressbookFilters {

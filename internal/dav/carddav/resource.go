@@ -102,7 +102,7 @@ func (c *CardDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Req
 
 		u, _ := common.CurrentUser(r.Context())
 		if u != nil {
-			ldapAddressbooks, err := c.handlers.dir.ListAddressbooks(r.Context(), &directory.User{UID: u.UID, DN: u.DN, DisplayName: u.DisplayName})
+			ldapAddressbooks, err := c.handlers.dir.ListAddressbooks(r.Context())
 			if err != nil {
 				c.handlers.logger.Error().Err(err).Str("user", u.UID).Msg("failed to list LDAP addressbooks")
 			} else {
@@ -223,7 +223,7 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 	var trueOwner string
 	isSharedMount := false
 	if ab == nil && collection != "shared" {
-		if sab, err := c.handlers.findAddressbookByURI(r.Context(), collection); err == nil && sab != nil {
+		if sab, err := c.handlers.findAddressbookByURI(r.Context(), collection, owner); err == nil && sab != nil {
 			pr := common.MustPrincipal(r.Context())
 			if ok, err := c.handlers.aclCheckRead(r.Context(), pr, sab.URI, sab.OwnerUserID); err == nil && ok {
 				ab = sab
