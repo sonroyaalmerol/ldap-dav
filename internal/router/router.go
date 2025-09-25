@@ -11,10 +11,12 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/carddav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 )
 
 var _ DAVService = (*caldav.Handlers)(nil)
+var _ DAVService = (*carddav.Handlers)(nil)
 
 func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger zerolog.Logger) http.Handler {
 	r := &Router{
@@ -26,7 +28,7 @@ func New(cfg *config.Config, h *dav.Handlers, authn *auth.Chain, logger zerolog.
 	}
 
 	r.RegisterService("caldav", &h.CalDAVHandlers)
-	// r.RegisterService("carddav", &h.CardDAVHandlers)
+	r.RegisterService("carddav", &h.CardDAVHandlers)
 
 	return r.setupRoutes()
 }
@@ -55,7 +57,7 @@ func (r *Router) setupRoutes() http.Handler {
 
 func (r *Router) setupWellKnownRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/.well-known/caldav", r.handlers.HandleWellKnown)
-	// mux.HandleFunc("/.well-known/carddav", r.handlers.HandleCardDAVWellKnown)
+	mux.HandleFunc("/.well-known/carddav", r.handlers.HandleWellKnown)
 }
 
 func (r *Router) getBasePath() string {

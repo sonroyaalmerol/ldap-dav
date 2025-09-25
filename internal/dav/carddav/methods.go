@@ -508,6 +508,10 @@ func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	owner, abURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || abURI == "" || len(rest) != 0 {
