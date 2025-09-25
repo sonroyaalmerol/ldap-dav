@@ -75,7 +75,7 @@ jobs:
       - name: Load CalDAV schema
         run: |
           LDAP_CID=$(docker ps -q --filter "ancestor=osixia/openldap:1.5.0")
-          docker cp deploy/ldap/caldav-schema.ldif $LDAP_CID:/tmp/caldav-schema.ldif
+          docker cp test/fixtures/ldap/caldav-schema.ldif $LDAP_CID:/tmp/caldav-schema.ldif
           docker exec $LDAP_CID ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/caldav-schema.ldif || true
 
       - name: Seed OpenLDAP base data (idempotent)
@@ -93,7 +93,7 @@ jobs:
             -H ldap://127.0.0.1:389 \
             -D "cn=admin,dc=example,dc=com" \
             -w admin \
-            -f deploy/ldap/base.ldif || true
+            -f test/fixtures/ldap/base.ldif || true
 
       - name: Cache Go modules
         uses: actions/cache@v4
