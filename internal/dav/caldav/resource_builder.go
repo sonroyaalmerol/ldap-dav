@@ -34,12 +34,16 @@ func (c *CalDAVResourceHandler) effectiveToPrivileges(eff acl.Effective) []commo
 		)
 	}
 
-	if eff.WriteProps {
-		privs = append(privs, common.Privilege{WriteProperties: &struct{}{}})
-	}
+	if eff.WriteProps && eff.WriteContent {
+		privs = append(privs, common.Privilege{Write: &struct{}{}})
+	} else {
+		if eff.WriteProps {
+			privs = append(privs, common.Privilege{WriteProperties: &struct{}{}})
+		}
 
-	if eff.WriteContent {
-		privs = append(privs, common.Privilege{WriteContent: &struct{}{}})
+		if eff.WriteContent {
+			privs = append(privs, common.Privilege{WriteContent: &struct{}{}})
+		}
 	}
 
 	if eff.CanCreate() {
