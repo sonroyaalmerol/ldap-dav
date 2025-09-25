@@ -5,6 +5,7 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/carddav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 
@@ -20,12 +21,12 @@ type Handlers struct {
 	logger           zerolog.Logger
 	basePath         string
 	CalDAVHandlers   caldav.Handlers
+	CardDAVHandlers  carddav.Handlers
 	resourceHandlers map[string]ResourceHandler
 }
 
 var _ ResourceHandler = (*caldav.CalDAVResourceHandler)(nil)
-
-//var _ ResourceHandler = (*caldav.CardDAVResourceHandler)(nil)
+var _ ResourceHandler = (*carddav.CardDAVResourceHandler)(nil)
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, authn *auth.Chain, logger zerolog.Logger) *Handlers {
 	h := &Handlers{
@@ -38,10 +39,11 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 		basePath:         cfg.HTTP.BasePath,
 		resourceHandlers: make(map[string]ResourceHandler),
 		CalDAVHandlers:   *caldav.NewHandlers(cfg, store, dir, logger),
+		CardDAVHandlers:  *carddav.NewHandlers(cfg, store, dir, logger),
 	}
 
 	h.RegisterResourceHandler("calendars", caldav.NewCalDAVResourceHandler(&h.CalDAVHandlers, h.basePath))
-	//h.RegisterResourceHandler("addressbooks", caldav.NewCardDAVResourceHandler(&h.CardDAVHandlers, h.basePath))
+	h.RegisterResourceHandler("addressbooks", carddav.NewCardDAVResourceHandler(&h.CardDAVHandlers, h.basePath))
 
 	return h
 }

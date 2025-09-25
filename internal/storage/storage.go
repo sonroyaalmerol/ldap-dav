@@ -36,6 +36,28 @@ type Change struct {
 	Seq     int64
 }
 
+type Contact struct {
+	ID            string
+	AddressbookID string
+	UID           string
+	Data          string
+	ETag          string
+	UpdatedAt     time.Time
+}
+
+type Addressbook struct {
+	ID          string
+	OwnerUserID string
+	OwnerGroup  string
+	URI         string
+	DisplayName string
+	Description string
+	Color       string
+	CTag        string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type Store interface {
 	Close()
 	// Calendars
@@ -58,4 +80,25 @@ type Store interface {
 	GetSyncInfo(ctx context.Context, calendarID string) (token string, seq int64, err error)
 	ListChangesSince(ctx context.Context, calendarID string, sinceSeq int64, limit int) ([]Change, int64, error)
 	RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (newToken string, newSeq int64, err error)
+
+	CreateAddressbook(a Addressbook, ownerGroup string, description string) error
+	DeleteAddressbook(ownerUserID, abURI string) error
+	GetAddressbookByID(ctx context.Context, id string) (*Addressbook, error)
+	UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abURI string, displayName *string) error
+	UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, color string) error
+	ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*Addressbook, error)
+	ListAllAddressbooks(ctx context.Context) ([]*Addressbook, error)
+
+	GetContact(ctx context.Context, addressbookID, uid string) (*Contact, error)
+	PutContact(ctx context.Context, c *Contact) error
+	DeleteContact(ctx context.Context, addressbookID, uid string, etag string) error
+
+	ListContacts(ctx context.Context, addressbookID string) ([]*Contact, error)
+
+	ListContactsByFilter(ctx context.Context, addressbookID string, propNames []string) ([]*Contact, error)
+
+	NewAddressbookCTag(ctx context.Context, addressbookID string) (string, error)
+	GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (token string, seq int64, err error)
+	ListAddressbookChangesSince(ctx context.Context, addressbookID string, sinceSeq int64, limit int) ([]Change, int64, error)
+	RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (newToken string, newSeq int64, err error)
 }

@@ -103,6 +103,27 @@ func ExtractTimeRange(f CalendarFilter) *TimeRange {
 	return nil
 }
 
+func ExtractPropFilterNames(f AddressbookFilter) []string {
+	seen := map[string]struct{}{}
+	var out []string
+
+	var visitProp func(p PropFilter)
+	visitProp = func(p PropFilter) {
+		if p.Name != "" {
+			if _, ok := seen[p.Name]; !ok {
+				seen[p.Name] = struct{}{}
+				out = append(out, p.Name)
+			}
+		}
+	}
+
+	for _, p := range f.PropFilters {
+		visitProp(p)
+	}
+
+	return out
+}
+
 func ExtractComponentFilterNames(f CalendarFilter) []string {
 	names := []string{}
 	c := &f.CompFilter

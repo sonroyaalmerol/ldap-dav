@@ -37,3 +37,15 @@ func CurrentUserPrincipalHref(ctx context.Context, basePath string) string {
 	}
 	return PrincipalURL(basePath, u.UID)
 }
+
+func AddressbookHome(basePath, uid string) string {
+	return JoinURL(basePath, "addressbooks", uid) + "/"
+}
+
+func AddressbookPath(basePath, owner, abURI string) string {
+	return JoinURL(basePath, "addressbooks", owner, abURI) + "/"
+}
+
+func AddressbookSharedRoot(basePath, uid string) string {
+	return JoinURL(basePath, "addressbooks", uid, "shared") + "/"
+}
