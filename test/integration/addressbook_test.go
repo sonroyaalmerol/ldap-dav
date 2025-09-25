@@ -32,6 +32,8 @@ func TestCardDAVIntegration(t *testing.T) {
 	// Start server subprocess
 	cmd := exec.Command("/usr/local/bin/ldap-dav")
 	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "LDAP_ADDRESSBOOK_FILTER_0_NAME=Test")
+	cmd.Env = append(cmd.Env, "LDAP_ADDRESSBOOK_FILTER_0_FILTER=(objectClass=person)")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

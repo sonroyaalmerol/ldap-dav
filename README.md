@@ -1,14 +1,14 @@
 # ldap-dav
 
-A CalDAV/WebDAV server in Go with LDAP-driven ACLs and sharing. Designed for minimal local state: users and groups are read from LDAP on demand. Supports Basic and Bearer auth, .well-known discovery, and auto-listing of shared calendars.
+A CalDAV/CardDAV server in Go with LDAP-driven ACLs and sharing. Designed for minimal local state: users and groups are read from LDAP on demand. Supports Basic and Bearer auth, .well-known discovery, and auto-listing of shared calendars.
 
 Production usage: Docker-only
 - We recommend running ldap-dav exclusively via Docker (and docker-compose) for a reproducible environment with OpenLDAP and PostgreSQL.
 - Native builds are possible (Go 1.25+), but Docker is the supported path.
 
 Key features
-- CalDAV (RFC 4791) on top of WebDAV (RFC 4918)
-- Sharing and ACLs via LDAP groups only
+- CalDAV (RFC 4791) and CardDAV (RFC 6352) on top of WebDAV (RFC 4918)
+- Calendar sharing and ACLs via LDAP groups only
   - Each LDAP group declares which calendars it grants access to and which privileges (read, write-props, write-content, bind, unbind, read-acl)
 - Users/groups are not replicated; resolved on-demand with short caching
 - Auth: HTTP Basic (LDAP bind) and Bearer (JWT via JWKS; opaque via RFC 7662 introspection optional)
@@ -157,7 +157,6 @@ Methods
 
 - Scheduling (RFC 6638): inbox/outbox resources, iTIP processing, delivery
 - Nested LDAP groups resolution (configurable depth)
-- CardDAV (/.well-known/carddav)
 - Quotas
 
 ## License

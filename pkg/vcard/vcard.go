@@ -3,6 +3,7 @@ package vcard
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -10,27 +11,37 @@ import (
 	"github.com/google/uuid"
 )
 
-// ValidateVCard parses the input and checks basic CardDAV expectations:
-// - At least one card present
-// - Each card has VERSION and FN
 func ValidateVCard(raw []byte) error {
+	if len(raw) == 0 {
+		return errors.New("empty vCard data")
+	}
+
+	// Check for basic vCard structure
+	content := string(raw)
+	if !strings.Contains(content, "BEGIN:VCARD") {
+		return errors.New("vCard data missing BEGIN:VCARD")
+	}
+	if !strings.Contains(content, "END:VCARD") {
+		return errors.New("vCard data missing END:VCARD")
+	}
+
 	cards, err := parseAll(raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("vCard parsing failed: %w", err)
 	}
 	if len(cards) == 0 {
-		return errors.New("no vcard found")
+		return errors.New("no valid vCard found after parsing")
 	}
+
 	for i, c := range cards {
 		ver := c.Value(govcard.FieldVersion)
 		if ver == "" {
-			return errors.New("vcard missing VERSION")
+			return fmt.Errorf("vCard %d missing VERSION", i)
 		}
 		fn := c.Value(govcard.FieldFormattedName)
 		if fn == "" {
-			return errors.New("vcard missing FN")
+			return fmt.Errorf("vCard %d missing FN", i)
 		}
-		_ = i
 	}
 	return nil
 }
@@ -93,9 +104,12 @@ func NormalizeVCard(raw []byte, targetVersion string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Helper: parse all cards from a byte slice using go-vcard.
 func parseAll(b []byte) ([]govcard.Card, error) {
-	dec := govcard.NewDecoder(bytes.NewReader(b))
+	// Normalize line endings to CRLF as required by RFC 6350
+	content := strings.ReplaceAll(string(b), "\n", "\r\n")
+	content = strings.ReplaceAll(content, "\r\r\n", "\r\n") // Fix double \r
+
+	dec := govcard.NewDecoder(strings.NewReader(content))
 	var out []govcard.Card
 	for {
 		c, err := dec.Decode()
@@ -103,7 +117,7 @@ func parseAll(b []byte) ([]govcard.Card, error) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode vCard: %w", err)
 		}
 		out = append(out, c)
 	}
