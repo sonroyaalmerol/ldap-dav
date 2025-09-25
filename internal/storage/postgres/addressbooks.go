@@ -19,7 +19,7 @@ func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, desc
 		insert into addressbooks (
 			id, owner_user_id, owner_group, uri, display_name, description, ctag
 		) values (
-			$1::uuid, $2, $3, $4, $5, $6, $7, $8
+			$1::uuid, $2, $3, $4, $5, $6, $7
 		)
 	`, a.ID, a.OwnerUserID, ownerGroup, a.URI, a.DisplayName, description, a.CTag)
 	return err
@@ -49,15 +49,6 @@ func (s *Store) UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abUR
 		set display_name = $1, updated_at = now()
 		where owner_user_id = $2 and uri = $3
 	`, displayName, ownerUID, abURI)
-	return err
-}
-
-func (s *Store) UpdateAddressbookColor(ctx context.Context, ownerUID, abURI, color string) error {
-	_, err := s.pool.Exec(ctx, `
-        update addressbooks
-        set color = $1, updated_at = now()
-        where owner_user_id = $2 and uri = $3
-    `, color, ownerUID, abURI)
 	return err
 }
 
