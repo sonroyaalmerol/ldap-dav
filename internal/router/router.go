@@ -12,6 +12,7 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
+	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 )
 
 var _ DAVService = (*caldav.Handlers)(nil)
@@ -114,11 +115,6 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	rec := &statusRecorder{ResponseWriter: w, status: 0, wroteHeader: false}
 
-	ip := realIP(req)
-	method := req.Method
-	path := req.URL.Path
-	ua := req.Header.Get("User-Agent")
-
 	user, _ := common.CurrentUser(req.Context())
 
 	// Determine service type based on path or content-type
@@ -128,6 +124,39 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 	if !exists {
 		// Fallback to CalDAV for backward compatibility
 		service = r.services["caldav"]
+	}
+
+	// Match /{base}/calendars/{user}/inbox[/...] and /{base}/calendars/{user}/outbox[/...]
+	if r.isSchedulingInboxPath(req.URL.Path) {
+		// PROPFIND (list collection and/or members), GET (fetch .ics), DELETE (remove)
+		switch req.Method {
+		case "PROPFIND":
+			r.handlers.CalDAVHandlers.HandleSchedulingInboxPropfind(w, req)
+		case http.MethodGet:
+			r.handlers.CalDAVHandlers.HandleSchedulingInboxGet(w, req)
+		case http.MethodDelete:
+			r.handlers.CalDAVHandlers.HandleSchedulingInboxDelete(w, req)
+		default:
+			w.Header().Set("Allow", "PROPFIND, GET, DELETE")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		r.logRequest(req, rec, start, serviceName, user)
+		return
+	}
+
+	if r.isSchedulingOutboxPath(req.URL.Path) {
+		// PROPFIND (properties on collection), POST (outgoing free-busy / scheduling)
+		switch req.Method {
+		case "PROPFIND":
+			r.handlers.CalDAVHandlers.HandleSchedulingOutboxPropfind(w, req)
+		case http.MethodPost:
+			r.handlers.CalDAVHandlers.HandleSchedulingOutboxPost(w, req)
+		default:
+			w.Header().Set("Allow", "PROPFIND, POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		r.logRequest(req, rec, start, serviceName, user)
+		return
 	}
 
 	switch req.Method {
@@ -153,31 +182,7 @@ func (r *Router) routeDAVMethod(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 
-	dur := time.Since(start)
-
-	var logEvent *zerolog.Event
-	switch req.Method {
-	case "PROPFIND", "REPORT", http.MethodGet, http.MethodHead:
-		logEvent = r.logger.Debug()
-	default:
-		logEvent = r.logger.Info()
-	}
-
-	logEntry := logEvent.
-		Str("method", method).
-		Str("path", path).
-		Str("service", serviceName).
-		Int("status", statusOrDefault(rec.status)).
-		Int("bytes", rec.bytes).
-		Float64("duration_ms", float64(dur.Microseconds())/1000.0).
-		Str("ip", ip).
-		Str("user_agent", ua)
-
-	if user != nil {
-		logEntry = logEntry.Str("user", user.UID)
-	}
-
-	logEntry.Msg("http request")
+	r.logRequest(req, rec, start, serviceName, user)
 }
 
 func (r *Router) determineServiceType(req *http.Request) string {
@@ -243,4 +248,48 @@ func (r *Router) logAttempt(req *http.Request, username string, authErr error) {
 	}
 
 	logEvent.Msg("auth attempt")
+}
+
+func (r *Router) logRequest(req *http.Request, rec *statusRecorder, start time.Time, serviceName string, user *directory.User) {
+	dur := time.Since(start)
+	ip := realIP(req)
+	ua := req.Header.Get("User-Agent")
+	var logEvent *zerolog.Event
+	switch req.Method {
+	case "PROPFIND", "REPORT", http.MethodGet, http.MethodHead:
+		logEvent = r.logger.Debug()
+	default:
+		logEvent = r.logger.Info()
+	}
+	logEntry := logEvent.
+		Str("method", req.Method).
+		Str("path", req.URL.Path).
+		Str("service", serviceName).
+		Int("status", statusOrDefault(rec.status)).
+		Int("bytes", rec.bytes).
+		Float64("duration_ms", float64(dur.Microseconds())/1000.0).
+		Str("ip", ip).
+		Str("user_agent", ua)
+	if user != nil {
+		logEntry = logEntry.Str("user", user.UID)
+	}
+	logEntry.Msg("http request")
+}
+
+// Scheduling collections live under: {base}/calendars/{uid}/inbox|outbox
+func (r *Router) isSchedulingInboxPath(p string) bool {
+	base := r.getBasePath()
+	if !strings.HasSuffix(base, "/") {
+		base += "/"
+	}
+	// Accept both ".../inbox" and ".../inbox/..." resource children
+	return strings.Contains(p, base+"calendars/") && strings.Contains(p, "/inbox")
+}
+
+func (r *Router) isSchedulingOutboxPath(p string) bool {
+	base := r.getBasePath()
+	if !strings.HasSuffix(base, "/") {
+		base += "/"
+	}
+	return strings.Contains(p, base+"calendars/") && strings.Contains(p, "/outbox")
 }

@@ -18,7 +18,7 @@ func GenerateEventETag(event *Event) string {
 	return event.UID + "-" + event.Start.Format("20060102T150405Z")
 }
 
-func parseDateTime(s string) (time.Time, bool, error) {
+func ParseDateTime(s string) (time.Time, bool, error) {
 	s = strings.TrimSpace(s)
 
 	if len(s) == 8 {
@@ -49,7 +49,7 @@ func parseMultipleDates(dateStr string) ([]time.Time, error) {
 			continue
 		}
 
-		date, _, err := parseDateTime(part)
+		date, _, err := ParseDateTime(part)
 		if err != nil {
 			continue
 		}

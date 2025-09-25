@@ -25,6 +25,8 @@ type Directory interface {
 	LookupUserByAttr(ctx context.Context, attr, value string) (*User, error)
 	UserGroupsACL(ctx context.Context, user *User) ([]GroupACL, error)
 	IntrospectToken(ctx context.Context, token, url, authHeader string) (bool, string, error)
+	FindUserByEmail(email string) (*User, error)
+	GetUserCalendarAddresses(ctx context.Context, user *User) ([]string, error)
 }
 
 type LDAPClient struct {
@@ -205,6 +207,20 @@ func (l *LDAPClient) IntrospectToken(ctx context.Context, token, url, authHeader
 
 	username := strings.SplitN(out.Sub, "@", 2)[0]
 	return out.Active, username, nil
+}
+
+func (l *LDAPClient) FindUserByEmail(email string) (*User, error) {
+	return l.LookupUserByAttr(context.Background(), "mail", email)
+}
+
+func (l *LDAPClient) GetUserCalendarAddresses(ctx context.Context, user *User) ([]string, error) {
+	addresses := []string{}
+
+	if user.Mail != "" {
+		addresses = append(addresses, "mailto:"+user.Mail)
+	}
+
+	return addresses, nil
 }
 
 func privilegesFromList(calID string, privs []string) GroupACL {

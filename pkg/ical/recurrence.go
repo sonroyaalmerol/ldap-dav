@@ -10,22 +10,6 @@ import (
 	"github.com/teambition/rrule-go"
 )
 
-type Event struct {
-	UID          string
-	Summary      string
-	Description  string
-	Start        time.Time
-	End          time.Time
-	Duration     time.Duration
-	IsAllDay     bool
-	IsRecurring  bool
-	RRule        string
-	RDates       []time.Time
-	ExDates      []time.Time
-	RecurrenceID *time.Time
-	RawData      []byte
-}
-
 type RecurrenceExpander struct {
 	timeZone *time.Location
 }
@@ -114,7 +98,7 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 		return nil, fmt.Errorf("missing DTSTART")
 	}
 
-	start, isAllDay, err := parseDateTime(dtstart.Value)
+	start, isAllDay, err := ParseDateTime(dtstart.Value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid DTSTART: %w", err)
 	}
@@ -122,7 +106,7 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 	event.IsAllDay = isAllDay
 
 	if dtend := comp.Props.Get(ical.PropDateTimeEnd); dtend != nil {
-		end, _, err := parseDateTime(dtend.Value)
+		end, _, err := ParseDateTime(dtend.Value)
 		if err != nil {
 			return nil, fmt.Errorf("invalid DTEND: %w", err)
 		}
@@ -172,7 +156,7 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 	}
 
 	if recID := comp.Props.Get(ical.PropRecurrenceID); recID != nil {
-		recTime, _, err := parseDateTime(recID.Value)
+		recTime, _, err := ParseDateTime(recID.Value)
 		if err == nil {
 			event.RecurrenceID = &recTime
 		}

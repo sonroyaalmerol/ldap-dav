@@ -26,18 +26,19 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 	}
 
 	meta := calMeta{
-		ID:          id,
-		OwnerUserID: c.OwnerUserID,
-		OwnerGroup:  ownerGroup,
-		URI:         c.URI,
-		DisplayName: c.DisplayName,
-		Description: description,
-		Color:       color,
-		CTag:        randID(),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		SyncToken:   "seq:0",
-		SyncSeq:     0,
+		ID:             id,
+		OwnerUserID:    c.OwnerUserID,
+		OwnerGroup:     ownerGroup,
+		URI:            c.URI,
+		DisplayName:    c.DisplayName,
+		Description:    description,
+		Color:          color,
+		CTag:           randID(),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		SyncToken:      "seq:0",
+		SyncSeq:        0,
+		ScheduleTransp: "opaque",
 	}
 	if err := writeJSON(s.calMetaPath(id), &meta); err != nil {
 		return err

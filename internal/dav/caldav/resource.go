@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -262,6 +263,16 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 	_ = propResp.EncodeProp(http.StatusOK, common.Owner{Href: &common.Href{Value: ownerHref}})
 	_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, pr.UserID)}})
 
+	_ = propResp.EncodeProp(http.StatusOK, common.ScheduleCalendarTransp{
+		Opaque: &struct{}{},
+	})
+
+	if collection == fmt.Sprintf("personal-%s", owner) {
+		_ = propResp.EncodeProp(http.StatusOK, common.ScheduleDefaultCalendarURL{
+			Href: &common.Href{Value: common.JoinURL(common.CalendarHome(c.basePath, owner), collection) + "/"},
+		})
+	}
+
 	_ = propResp.EncodeProp(http.StatusOK, common.SupportedCompSet{
 		Comp: []common.Comp{{Name: "VEVENT"}, {Name: "VTODO"}, {Name: "VJOURNAL"}},
 	})
@@ -373,11 +384,26 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
+	scheduleTag, err := c.handlers.store.GetScheduleTag(r.Context(), calendarID, uid)
+	if err != nil {
+		c.handlers.logger.Debug().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("scheduleTag not found in PROPFIND object")
+	}
+
 	hrefStr := common.JoinURL(c.handlers.basePath, "calendars", owner, collection, uid+".ics")
 
 	resp := common.Response{
 		Hrefs: []common.Href{{Value: hrefStr}},
 	}
+
+	if scheduleTag != "" {
+		_ = resp.EncodeProp(http.StatusOK, common.ScheduleTag{
+			Tag: scheduleTag,
+		})
+	}
+
 	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
 	if !obj.UpdatedAt.IsZero() {
 		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(obj.UpdatedAt.UTC())})

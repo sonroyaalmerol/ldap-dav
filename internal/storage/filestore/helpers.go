@@ -38,30 +38,32 @@ func randID() string {
 }
 
 type calMeta struct {
-	ID          string    `json:"id"`
-	OwnerUserID string    `json:"owner_user_id"`
-	OwnerGroup  string    `json:"owner_group"`
-	URI         string    `json:"uri"`
-	DisplayName string    `json:"display_name"`
-	Description string    `json:"description"`
-	Color       string    `json:"color"`
-	CTag        string    `json:"ctag"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	SyncToken   string    `json:"sync_token"`
-	SyncSeq     int64     `json:"sync_seq"`
+	ID             string    `json:"id"`
+	OwnerUserID    string    `json:"owner_user_id"`
+	OwnerGroup     string    `json:"owner_group"`
+	URI            string    `json:"uri"`
+	DisplayName    string    `json:"display_name"`
+	Description    string    `json:"description"`
+	Color          string    `json:"color"`
+	CTag           string    `json:"ctag"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	SyncToken      string    `json:"sync_token"`
+	SyncSeq        int64     `json:"sync_seq"`
+	ScheduleTransp string    `json:"schedule_transp,omitempty"`
 }
 
 type objFile struct {
-	ID         string     `json:"id"`
-	CalendarID string     `json:"calendar_id"`
-	UID        string     `json:"uid"`
-	ETag       string     `json:"etag"`
-	Data       string     `json:"data"`
-	Component  string     `json:"component"`
-	StartAt    *time.Time `json:"start_at,omitempty"`
-	EndAt      *time.Time `json:"end_at,omitempty"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID          string     `json:"id"`
+	CalendarID  string     `json:"calendar_id"`
+	UID         string     `json:"uid"`
+	ETag        string     `json:"etag"`
+	Data        string     `json:"data"`
+	Component   string     `json:"component"`
+	StartAt     *time.Time `json:"start_at,omitempty"`
+	EndAt       *time.Time `json:"end_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ScheduleTag string     `json:"schedule_tag,omitempty"`
 }
 
 type changeRow struct {

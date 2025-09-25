@@ -36,6 +36,16 @@ type Change struct {
 	Seq     int64
 }
 
+type SchedulingMessage struct {
+	ID         string
+	UserID     string
+	UID        string
+	Method     string
+	Data       string
+	ReceivedAt time.Time
+	Processed  bool
+}
+
 type Store interface {
 	Close()
 	// Calendars
@@ -58,4 +68,20 @@ type Store interface {
 	GetSyncInfo(ctx context.Context, calendarID string) (token string, seq int64, err error)
 	ListChangesSince(ctx context.Context, calendarID string, sinceSeq int64, limit int) ([]Change, int64, error)
 	RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (newToken string, newSeq int64, err error)
+
+	ProcessSchedulingMessage(ctx context.Context, recipient string, icsData []byte, method string) error
+	GetSchedulingInboxObjects(ctx context.Context, userID string) ([]*SchedulingMessage, error)
+	DeleteSchedulingInboxObject(ctx context.Context, userID, uid string) error
+
+	// Schedule tags for conflict detection
+	GetScheduleTag(ctx context.Context, calendarID, uid string) (string, error)
+	UpdateScheduleTag(ctx context.Context, calendarID, uid string) (string, error)
+
+	// Default calendar for incoming scheduling messages
+	GetDefaultCalendar(ctx context.Context, userID string) (string, error)
+	SetDefaultCalendar(ctx context.Context, userID, calendarID string) error
+
+	// Calendar transparency
+	GetCalendarTransparency(ctx context.Context, calendarID string) (string, error)
+	SetCalendarTransparency(ctx context.Context, calendarID string, transp string) error
 }

@@ -241,6 +241,20 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
+	if newTag, err := h.store.UpdateScheduleTag(r.Context(), calendarID, uid); err == nil {
+		w.Header().Set("Schedule-Tag", newTag)
+	}
+
+	if h.schedulingService != nil {
+		if err := h.schedulingService.ProcessSchedulingObject(r.Context(), pr.UserID, existing, obj); err != nil {
+			h.logger.Error().Err(err).
+				Str("calendarID", calendarID).
+				Str("uid", uid).
+				Msg("Scheduling operation failed")
+		}
+	}
+
 	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, false)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -347,6 +361,11 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var objForScheduling *storage.Object
+	if h.schedulingService != nil {
+		objForScheduling, _ = h.store.GetObject(r.Context(), calendarID, uid)
+	}
+
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
 		h.logger.Error().Err(err).
@@ -356,6 +375,16 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
+	if h.schedulingService != nil && objForScheduling != nil {
+		if err := h.schedulingService.ProcessSchedulingObject(r.Context(), pr.UserID, objForScheduling, nil); err != nil {
+			h.logger.Error().Err(err).
+				Str("calendarID", calendarID).
+				Str("uid", uid).
+				Msg("Scheduling operation failed for DELETE")
+		}
+	}
+
 	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, true)
 	if err != nil {
 		h.logger.Error().Err(err).

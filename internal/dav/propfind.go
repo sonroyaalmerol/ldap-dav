@@ -102,6 +102,37 @@ func (h *Handlers) propfindPrincipal(w http.ResponseWriter, r *http.Request, _ s
 	if err := resp.EncodeProp(http.StatusOK, common.CalendarHomeSet{Hrefs: []common.Href{{Value: common.CalendarHome(h.basePath, u.UID)}}}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode CalendarHomeSet property")
 	}
+	// CalDAV Scheduling properties (RFC 6638)
+	if err := resp.EncodeProp(http.StatusOK, common.ScheduleInboxURL{
+		Href: common.Href{Value: common.ScheduleInboxPath(h.basePath, u.UID)},
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode ScheduleInboxURL property")
+	}
+
+	if err := resp.EncodeProp(http.StatusOK, common.ScheduleOutboxURL{
+		Href: common.Href{Value: common.ScheduleOutboxPath(h.basePath, u.UID)},
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode ScheduleOutboxURL property")
+	}
+
+	userEmail := ""
+	if u.Mail != "" {
+		userEmail = "mailto:" + u.Mail
+	}
+	if userEmail != "" {
+		if err := resp.EncodeProp(http.StatusOK, common.CalendarUserAddressSet{
+			Hrefs: []common.Href{{Value: userEmail}},
+		}); err != nil {
+			h.logger.Error().Err(err).Msg("failed to encode CalendarUserAddressSet property")
+		}
+	}
+
+	if err := resp.EncodeProp(http.StatusOK, common.CalendarUserType{
+		Value: "INDIVIDUAL",
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode CalendarUserType property")
+	}
+
 	if err := resp.EncodeProp(http.StatusOK, struct {
 		XMLName xml.Name `xml:"DAV: principal-URL"`
 		Href    common.Href
@@ -140,6 +171,47 @@ func (h *Handlers) propfindRoot(w http.ResponseWriter, r *http.Request, _ []byte
 		Hrefs: []common.Href{{Value: common.JoinURL(h.basePath, "principals") + "/"}},
 	}); err != nil {
 		h.logger.Error().Err(err).Msg("failed to encode PrincipalCollectionSet for root")
+	}
+
+	if err := resp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: supported-method-set"`
+		Methods []struct {
+			XMLName xml.Name `xml:"DAV: supported-method"`
+			Name    string   `xml:"name,attr"`
+		}
+	}{
+		Methods: []struct {
+			XMLName xml.Name `xml:"DAV: supported-method"`
+			Name    string   `xml:"name,attr"`
+		}{
+			{Name: "OPTIONS"},
+			{Name: "GET"},
+			{Name: "HEAD"},
+			{Name: "POST"},
+			{Name: "PUT"},
+			{Name: "DELETE"},
+			{Name: "PROPFIND"},
+			{Name: "PROPPATCH"},
+			{Name: "MKCOL"},
+			{Name: "COPY"},
+			{Name: "MOVE"},
+			{Name: "REPORT"},
+		},
+	}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode supported-method-set for root")
+	}
+
+	if err := resp.EncodeProp(http.StatusOK, struct {
+		XMLName xml.Name `xml:"DAV: supported-live-property-set"`
+		Props   []struct {
+			XMLName xml.Name `xml:"DAV: supported-live-property"`
+			Prop    struct {
+				XMLName xml.Name `xml:"DAV: prop"`
+				Name    xml.Name `xml:",any"`
+			}
+		}
+	}{}); err != nil {
+		h.logger.Error().Err(err).Msg("failed to encode supported-live-property-set for root")
 	}
 
 	ms := common.NewMultiStatus(resp)

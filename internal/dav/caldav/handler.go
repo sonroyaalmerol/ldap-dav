@@ -11,18 +11,21 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
 	"github.com/sonroyaalmerol/ldap-dav/internal/auth"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
+	"github.com/sonroyaalmerol/ldap-dav/internal/dav/caldav/scheduling"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
 type Handlers struct {
-	cfg      *config.Config
-	store    storage.Store
-	aclProv  acl.Provider
-	logger   zerolog.Logger
-	basePath string
-	expander *ical.RecurrenceExpander
+	cfg               *config.Config
+	store             storage.Store
+	aclProv           acl.Provider
+	dir               directory.Directory
+	logger            zerolog.Logger
+	basePath          string
+	expander          *ical.RecurrenceExpander
+	schedulingService *scheduling.Service
 }
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, logger zerolog.Logger) *Handlers {
@@ -33,12 +36,14 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 	}
 
 	return &Handlers{
-		cfg:      cfg,
-		store:    store,
-		aclProv:  acl.NewLDAPACL(dir),
-		logger:   logger,
-		basePath: cfg.HTTP.BasePath,
-		expander: ical.NewRecurrenceExpander(tz),
+		cfg:               cfg,
+		store:             store,
+		aclProv:           acl.NewLDAPACL(dir),
+		logger:            logger,
+		dir:               dir,
+		basePath:          cfg.HTTP.BasePath,
+		expander:          ical.NewRecurrenceExpander(tz),
+		schedulingService: scheduling.NewService(cfg, store, dir, logger),
 	}
 }
 
