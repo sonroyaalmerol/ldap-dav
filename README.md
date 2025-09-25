@@ -36,7 +36,6 @@ Key features
 - docker-compose.yml (provided)
 - deploy/ldap/caldav-schema.ldif (custom schema)
 - deploy/ldap/base.ldif (seed entries)
-- internal/storage/postgres/schema.sql (app schema)
 
 3) Bring up the stack
 
