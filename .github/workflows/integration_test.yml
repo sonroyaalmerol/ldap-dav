@@ -215,7 +215,7 @@ jobs:
         run: |
           docker run --rm --network host \
             -e STORAGE_TYPE \
-            -e FILE_ROOT \
+            -e SQLITE_PATH \
             -e LDAP_URL \
             -e LDAP_BIND_DN \
             -e LDAP_BIND_PASSWORD \
@@ -245,7 +245,7 @@ jobs:
         run: |
           docker run --rm --network host \
             -e STORAGE_TYPE \
-            -e FILE_ROOT \
+            -e SQLITE_PATH \
             -e LDAP_URL \
             -e LDAP_BIND_DN \
             -e LDAP_BIND_PASSWORD \
