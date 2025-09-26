@@ -54,9 +54,6 @@ func configureSQLite(db *sql.DB) error {
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA synchronous = NORMAL",
-		"PRAGMA busy_timeout = 30000",
-		"PRAGMA cache_size = 10000",
-		"PRAGMA temp_store = memory",
 	}
 
 	for _, pragma := range pragmas {
