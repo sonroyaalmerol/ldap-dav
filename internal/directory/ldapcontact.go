@@ -10,18 +10,20 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/rs/zerolog"
 	"github.com/sonroyaalmerol/ldap-dav/internal/cache"
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 )
 
 type LDAPContactClient struct {
 	cfg     config.LDAPAddressbookFilter
+	logger  zerolog.Logger
 	tlsBase config.LDAPConfig
 	conn    *ldap.Conn
 	cache   *cache.Cache[string, []Contact]
 }
 
-func NewLDAPContactClient(filterCfg config.LDAPAddressbookFilter, base config.LDAPConfig) (*LDAPContactClient, error) {
+func NewLDAPContactClient(filterCfg config.LDAPAddressbookFilter, base config.LDAPConfig, logger zerolog.Logger) (*LDAPContactClient, error) {
 	conn, err := dialLDAPFromFilter(filterCfg)
 	if err != nil {
 		return nil, err
@@ -30,6 +32,7 @@ func NewLDAPContactClient(filterCfg config.LDAPAddressbookFilter, base config.LD
 		cfg:     filterCfg,
 		tlsBase: base,
 		conn:    conn,
+		logger:  logger,
 		cache:   cache.New[string, []Contact](base.CacheTTL),
 	}, nil
 }
@@ -128,15 +131,21 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error)
 	}
 	search := ldap.NewSearchRequest(
 		c.cfg.BaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 15, false,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
 		c.cfg.Filter,
 		c.attrsForFilter(),
 		nil,
 	)
 	res, err := c.conn.Search(search)
 	if err != nil {
+		c.logger.Error().Err(err).
+			Str("url", c.cfg.URL).
+			Str("base_dn", c.cfg.BaseDN).
+			Str("filter", c.cfg.Filter).
+			Msg("LDAP search failed in ListContacts")
 		return nil, err
 	}
+
 	out := make([]Contact, 0, len(res.Entries))
 	for _, e := range res.Entries {
 		out = append(out, c.mapEntry(e))
@@ -148,17 +157,32 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error)
 func (c *LDAPContactClient) GetContact(ctx context.Context, uid string) (*Contact, error) {
 	search := ldap.NewSearchRequest(
 		c.cfg.BaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 15, false,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
 		fmt.Sprintf("(%s=%s)", c.cfg.MapUID, uid),
 		c.attrsForFilter(),
 		nil,
 	)
 	res, err := c.conn.Search(search)
 	if err != nil {
+		c.logger.Error().Err(err).
+			Str("url", c.cfg.URL).
+			Str("attr", c.cfg.MapUID).
+			Str("value", uid).
+			Str("base_dn", c.cfg.BaseDN).
+			Str("filter", c.cfg.Filter).
+			Msg("LDAP search failed in GetContact")
 		return nil, err
 	}
 
 	if len(res.Entries) != 1 {
+		c.logger.Error().Err(err).
+			Str("url", c.cfg.URL).
+			Str("attr", c.cfg.MapUID).
+			Str("value", uid).
+			Str("base_dn", c.cfg.BaseDN).
+			Str("filter", c.cfg.Filter).
+			Int("num_entries", len(res.Entries)).
+			Msg("LDAP search failed in GetContact")
 		return nil, ldap.NewError(ldap.ErrorFilterCompile, errors.New("not found"))
 	}
 
@@ -212,38 +236,48 @@ func (c *LDAPContactClient) generateVCard(contact Contact) string {
 	vcard.WriteString("VERSION:3.0\r\n")
 
 	if contact.DisplayName != "" {
-		vcard.WriteString(fmt.Sprintf("FN:%s\r\n", contact.DisplayName))
+		vcard.WriteString(fmt.Sprintf("FN:%s\r\n", escapeVCardValue(contact.DisplayName)))
 	}
 
 	if contact.FirstName != "" || contact.LastName != "" {
-		vcard.WriteString(fmt.Sprintf("N:%s;%s;;;\r\n", contact.LastName, contact.FirstName))
+		vcard.WriteString(fmt.Sprintf("N:%s;%s;;;\r\n",
+			escapeVCardValue(contact.LastName),
+			escapeVCardValue(contact.FirstName)))
 	}
 
 	for _, email := range contact.Email {
 		if email != "" {
-			vcard.WriteString(fmt.Sprintf("EMAIL:%s\r\n", email))
+			vcard.WriteString(fmt.Sprintf("EMAIL:%s\r\n", escapeVCardValue(email)))
 		}
 	}
 
 	for _, phone := range contact.Phone {
 		if phone != "" {
-			vcard.WriteString(fmt.Sprintf("TEL:%s\r\n", phone))
+			vcard.WriteString(fmt.Sprintf("TEL:%s\r\n", escapeVCardValue(phone)))
 		}
 	}
 
 	if contact.Organization != "" {
-		vcard.WriteString(fmt.Sprintf("ORG:%s\r\n", contact.Organization))
+		vcard.WriteString(fmt.Sprintf("ORG:%s\r\n", escapeVCardValue(contact.Organization)))
 	}
 
 	if contact.Title != "" {
-		vcard.WriteString(fmt.Sprintf("TITLE:%s\r\n", contact.Title))
+		vcard.WriteString(fmt.Sprintf("TITLE:%s\r\n", escapeVCardValue(contact.Title)))
 	}
 
 	if contact.ID != "" {
-		vcard.WriteString(fmt.Sprintf("UID:%s\r\n", contact.ID))
+		vcard.WriteString(fmt.Sprintf("UID:%s\r\n", escapeVCardValue(contact.ID)))
 	}
 
 	vcard.WriteString("END:VCARD\r\n")
-
 	return vcard.String()
+}
+
+func escapeVCardValue(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, ",", "\\,")
+	s = strings.ReplaceAll(s, ";", "\\;")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	return s
 }

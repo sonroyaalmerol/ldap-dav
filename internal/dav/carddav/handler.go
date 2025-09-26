@@ -31,7 +31,7 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 		if !f.Enabled {
 			continue
 		}
-		client, err := directory.NewLDAPContactClient(f, cfg.LDAP)
+		client, err := directory.NewLDAPContactClient(f, cfg.LDAP, logger)
 		if err != nil {
 			logger.Error().Err(err).
 				Str("url", f.URL).

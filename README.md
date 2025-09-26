@@ -131,6 +131,7 @@ Common variables per `N`:
 - `LDAP_ADDRESSBOOK_FILTER_{N}_URI`: Slug/URI for address book (default slug of `NAME`)
 
 Attribute mappings (optional, with defaults):
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_UID`: default `"uid"`
 - `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_DISPLAY_NAME`: default `"displayName"`
 - `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_FIRST_NAME`: default `"givenName"`
 - `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_LAST_NAME`: default `"sn"`
