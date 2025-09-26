@@ -153,12 +153,19 @@ type PrincipalCollectionSet struct {
 	Hrefs   []Href   `xml:"href"`
 }
 
+type CalendarFreeBusySet struct {
+	XMLName xml.Name `xml:"DAV: free-busy-set"`
+	Hrefs   []Href   `xml:"href"`
+}
+
 type ResourceType struct {
-	XMLName     xml.Name  `xml:"DAV: resourcetype"`
-	Collection  *struct{} `xml:"DAV: collection,omitempty"`
-	Principal   *struct{} `xml:"DAV: principal,omitempty"`
-	Calendar    *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar,omitempty"`
-	Addressbook *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook,omitempty"`
+	XMLName        xml.Name  `xml:"DAV: resourcetype"`
+	Collection     *struct{} `xml:"DAV: collection,omitempty"`
+	Principal      *struct{} `xml:"DAV: principal,omitempty"`
+	ScheduleInbox  *struct{} `xml:"DAV: schedule-inbox,omitempty"`
+	ScheduleOutbox *struct{} `xml:"DAV: schedule-outbox,omitempty"`
+	Calendar       *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar,omitempty"`
+	Addressbook    *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook,omitempty"`
 }
 
 type SupportedCalData struct {

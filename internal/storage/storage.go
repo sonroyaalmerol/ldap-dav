@@ -57,6 +57,42 @@ type Addressbook struct {
 	UpdatedAt   time.Time
 }
 
+type SchedulingObject struct {
+	ID         string
+	CalendarID string
+	UID        string
+	ETag       string
+	Data       string
+	Method     string // REQUEST, REPLY, CANCEL, etc.
+	Recipient  string
+	Originator string
+	Status     string // pending, delivered, failed
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AttendeeResponse struct {
+	ID             string
+	EventUID       string
+	CalendarID     string
+	AttendeeEmail  string
+	ResponseStatus string // ACCEPTED, DECLINED, TENTATIVE
+	ResponseData   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type FreeBusyInfo struct {
+	ID        string
+	UserID    string
+	StartTime time.Time
+	EndTime   time.Time
+	BusyType  string // BUSY, BUSY-UNAVAILABLE, BUSY-TENTATIVE
+	EventUID  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type Store interface {
 	Close()
 	// Calendars
@@ -99,4 +135,31 @@ type Store interface {
 	GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (token string, seq int64, err error)
 	ListAddressbookChangesSince(ctx context.Context, addressbookID string, sinceSeq int64, limit int) ([]Change, int64, error)
 	RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (newToken string, newSeq int64, err error)
+
+	CreateSchedulingInbox(ctx context.Context, ownerUserID, ownerGroup string) error
+	CreateSchedulingOutbox(ctx context.Context, ownerUserID, ownerGroup string) error
+
+	GetSchedulingInbox(ctx context.Context, ownerUserID string) (*Calendar, error)
+	GetSchedulingOutbox(ctx context.Context, ownerUserID string) (*Calendar, error)
+
+	StoreSchedulingObject(ctx context.Context, obj *SchedulingObject) error
+	GetSchedulingObject(ctx context.Context, calendarID, uid, recipient string) (*SchedulingObject, error)
+
+	ListSchedulingObjects(ctx context.Context, calendarID string) ([]*SchedulingObject, error)
+	DeleteSchedulingObject(ctx context.Context, calendarID, uid, recipient string) error
+	DeleteOldSchedulingObjects(ctx context.Context, cutoff time.Time) error
+	DeleteOldAttendeeResponses(ctx context.Context, cutoff time.Time) error
+	DeleteOldFreeBusyInfo(ctx context.Context, cutoff time.Time) error
+
+	UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error
+	StoreAttendeeResponse(ctx context.Context, response *AttendeeResponse) error
+
+	GetAttendeeResponse(ctx context.Context, eventUID, attendeeEmail string) (*AttendeeResponse, error)
+	ListAttendeeResponses(ctx context.Context, eventUID string) ([]*AttendeeResponse, error)
+
+	StoreFreeBusyInfo(ctx context.Context, info *FreeBusyInfo) error
+	GetFreeBusyInfo(ctx context.Context, userID string, start, end time.Time) ([]*FreeBusyInfo, error)
+	DeleteFreeBusyInfo(ctx context.Context, userID, eventUID string) error
+
+	GetPendingSchedulingObjects(ctx context.Context, limit int) ([]*SchedulingObject, error)
 }

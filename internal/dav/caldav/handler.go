@@ -42,6 +42,16 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 	}
 }
 
+func (h *Handlers) ensureSchedulingCollections(ctx context.Context, userID string) {
+	if err := h.store.CreateSchedulingInbox(ctx, userID, ""); err != nil {
+		h.logger.Error().Err(err).Str("user", userID).Msg("failed to create scheduling inbox")
+	}
+
+	if err := h.store.CreateSchedulingOutbox(ctx, userID, ""); err != nil {
+		h.logger.Error().Err(err).Str("user", userID).Msg("failed to create scheduling outbox")
+	}
+}
+
 func (h *Handlers) ensurePersonalCalendar(ctx context.Context, ownerUID string) {
 	now := time.Now().UTC()
 	calURI := fmt.Sprintf("personal-%s", ownerUID)
@@ -66,6 +76,8 @@ func (h *Handlers) ensurePersonalCalendar(ctx context.Context, ownerUID string) 
 				Msg("Failed to create Personal Calendar")
 		}
 	}
+
+	h.ensureSchedulingCollections(ctx, ownerUID)
 }
 
 func (h *Handlers) mustCanRead(w http.ResponseWriter, ctx context.Context, pr *auth.Principal, calURI, calOwner string) bool {

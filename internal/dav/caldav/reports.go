@@ -15,6 +15,16 @@ import (
 
 func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q common.CalendarQuery) {
 	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
+
+	if strings.HasSuffix(calURI, "-inbox") {
+		h.reportSchedulingInbox(w, r, owner, calURI, q)
+		return
+	}
+	if strings.HasSuffix(calURI, "-outbox") {
+		h.reportSchedulingOutbox(w, r, owner, calURI, q)
+		return
+	}
+
 	calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -305,16 +315,35 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
+	var busy []ical.Interval
+	freeBusyData, err := h.store.GetFreeBusyInfo(r.Context(), owner, start, end)
 	if err != nil {
 		h.logger.Error().Err(err).
-			Str("calendarID", calendarID).
-			Msg("failed to list events for free-busy query")
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
+			Str("owner", owner).
+			Msg("failed to get free/busy info")
+			// Fall back to calendar object method
+		objs, err := h.store.ListObjectsByComponent(r.Context(), calendarID, []string{"VEVENT"}, &start, &end)
+		if err != nil {
+			h.logger.Error().Err(err).
+				Str("calendarID", calendarID).
+				Msg("failed to list events for free-busy query")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		busy = h.buildBusyIntervals(objs, start, end)
+	} else {
+		// Convert stored free/busy info to intervals
+		for _, fbInfo := range freeBusyData {
+			if fbInfo.BusyType != "FREE" {
+				busy = append(busy, ical.Interval{
+					S: fbInfo.StartTime,
+					E: fbInfo.EndTime,
+				})
+			}
+		}
 	}
 
-	busy := h.buildBusyIntervals(objs, start, end)
+	busy = common.MergeIntervalsFB(busy)
 
 	icsData := common.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
@@ -388,4 +417,78 @@ func (h *Handlers) eventToInterval(event *ical.Event, start, end time.Time) *ica
 		}
 	}
 	return nil
+}
+
+func (h *Handlers) reportSchedulingInbox(w http.ResponseWriter, r *http.Request, owner, inboxURI string, q common.CalendarQuery) {
+	pr := common.MustPrincipal(r.Context())
+	if pr.UserID != owner {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Get the scheduling inbox
+	inbox, err := h.store.GetSchedulingInbox(r.Context(), owner)
+	if err != nil {
+		h.logger.Error().Err(err).Str("owner", owner).Msg("failed to get scheduling inbox")
+		http.NotFound(w, r)
+		return
+	}
+
+	// List scheduling objects in the inbox
+	schedObjs, err := h.store.ListSchedulingObjects(r.Context(), inbox.ID)
+	if err != nil {
+		h.logger.Error().Err(err).Str("inboxID", inbox.ID).Msg("failed to list scheduling objects")
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	props := common.ParsePropRequest(q.Prop)
+	var resps []common.Response
+
+	for _, obj := range schedObjs {
+		hrefStr := common.JoinURL(h.basePath, "calendars", owner, inboxURI, obj.UID+".ics")
+		resp := h.buildSchedulingObjectResponse(hrefStr, props, obj)
+		resps = append(resps, resp)
+	}
+
+	ms := common.MultiStatus{Responses: resps}
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for scheduling inbox query")
+	}
+}
+
+func (h *Handlers) reportSchedulingOutbox(w http.ResponseWriter, r *http.Request, owner, outboxURI string, q common.CalendarQuery) {
+	// Scheduling outbox typically doesn't store persistent objects
+	// It's mainly used for POST operations
+	// Return empty response
+	ms := common.MultiStatus{Responses: []common.Response{}}
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for scheduling outbox query")
+	}
+}
+
+func (h *Handlers) buildSchedulingObjectResponse(hrefStr string, props common.PropRequest, obj *storage.SchedulingObject) common.Response {
+	resp := common.Response{
+		Hrefs: []common.Href{{Value: hrefStr}},
+	}
+
+	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
+
+	if props.CalendarData {
+		type CalendarData struct {
+			XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+			Text    string   `xml:",chardata"`
+		}
+		_ = resp.EncodeProp(http.StatusOK, CalendarData{Text: obj.Data})
+	}
+
+	if props.GetETag && obj.ETag != "" {
+		_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(obj.ETag)})
+	}
+
+	if !obj.UpdatedAt.IsZero() {
+		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(obj.UpdatedAt)})
+	}
+
+	return resp
 }

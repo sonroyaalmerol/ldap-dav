@@ -98,6 +98,17 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, obj.Data)
 }
 
+func (h *Handlers) HandlePost(w http.ResponseWriter, r *http.Request) {
+	owner, calURI, _ := splitResourcePath(r.URL.Path, h.basePath)
+
+	if strings.HasSuffix(calURI, "-outbox") {
+		h.handleSchedulingOutboxPost(w, r, owner, calURI)
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {
@@ -241,6 +252,21 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
+	if err := h.deleteFreeBusyInfoForEvent(r.Context(), calURI, uid); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", obj.UID).
+			Msg("failed to cleanup old free/busy info")
+	}
+
+	if err := h.updateFreeBusyInfo(r.Context(), calURI, obj); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", obj.UID).
+			Msg("failed to update free/busy info")
+	}
+
 	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, false)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -356,6 +382,14 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
+	if err := h.deleteFreeBusyInfoForEvent(r.Context(), calURI, uid); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", uid).
+			Msg("failed to delete free/busy info")
+	}
+
 	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, true)
 	if err != nil {
 		h.logger.Error().Err(err).

@@ -180,6 +180,15 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 }
 
 func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *http.Request, owner, collection, depth string) {
+	if strings.HasSuffix(collection, "-inbox") {
+		c.propfindSchedulingInbox(w, r, owner, collection, depth)
+		return
+	}
+	if strings.HasSuffix(collection, "-outbox") {
+		c.propfindSchedulingOutbox(w, r, owner, collection, depth)
+		return
+	}
+
 	requesterUID := owner
 
 	cals, err := c.handlers.store.ListCalendarsByOwnerUser(r.Context(), owner)
