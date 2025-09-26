@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/xml"
 	"strconv"
 	"strings"
 	"time"
@@ -141,12 +142,36 @@ func ExtractComponentFilterNames(f CalendarFilter) []string {
 	return names
 }
 
-func ParsePropRequest(_ PropContainer) PropRequest {
-	// Default to returning calendar-data and etag for compatibility
-	return PropRequest{
-		GetETag:      true,
-		CalendarData: true,
+func ParsePropRequest(container PropContainer) PropRequest {
+	var req PropRequest
+
+	for _, raw := range container.Raw {
+		if raw.tok == nil {
+			continue
+		}
+
+		switch startEl := raw.tok.(type) {
+		case xml.StartElement:
+			switch {
+			case startEl.Name.Space == "DAV:" && startEl.Name.Local == "getetag":
+				req.GetETag = true
+			case startEl.Name.Space == "urn:ietf:params:xml:ns:caldav" && startEl.Name.Local == "calendar-data":
+				req.CalendarData = true
+			case startEl.Name.Space == "urn:ietf:params:xml:ns:carddav" && startEl.Name.Local == "address-data":
+				req.AddressData = true
+			}
+		}
 	}
+
+	if !req.GetETag && !req.CalendarData && !req.AddressData {
+		return PropRequest{
+			GetETag:      true,
+			CalendarData: true,
+			AddressData:  true,
+		}
+	}
+
+	return req
 }
 
 func ParseSeqToken(tok string) (int64, bool) {

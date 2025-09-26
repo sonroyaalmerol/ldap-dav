@@ -86,11 +86,18 @@ func (h *Handlers) ReportAddressbookQuery(w http.ResponseWriter, r *http.Request
 func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Request, mg common.AddressbookMultiget) {
 	props := common.ParsePropRequest(mg.Prop)
 	var resps []common.Response
+
 	for _, hrefStr := range mg.Hrefs {
 		owner, abURI, rest := splitResourcePath(hrefStr, h.basePath)
 		if owner == "" || len(rest) == 0 {
+			resp := common.Response{
+				Hrefs:  []common.Href{{Value: hrefStr}},
+				Status: &common.Status{Code: http.StatusNotFound},
+			}
+			resps = append(resps, resp)
 			continue
 		}
+
 		filename := rest[len(rest)-1]
 		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
@@ -100,6 +107,11 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 				Str("owner", owner).
 				Str("addressbook", abURI).
 				Msg("failed to resolve addressbook in multiget")
+			resp := common.Response{
+				Hrefs:  []common.Href{{Value: hrefStr}},
+				Status: &common.Status{Code: http.StatusNotFound},
+			}
+			resps = append(resps, resp)
 			continue
 		}
 
@@ -110,16 +122,28 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 					Str("addressbookID", addressbookID).
 					Str("uid", uid).
 					Msg("failed to get contact in ldap multiget")
-				return
+				resp := common.Response{
+					Hrefs:  []common.Href{{Value: hrefStr}},
+					Status: &common.Status{Code: http.StatusNotFound},
+				}
+				resps = append(resps, resp)
+				continue
 			}
+
 			contact, err := dir.GetContact(r.Context(), uid)
 			if err != nil {
 				h.logger.Debug().Err(err).
 					Str("addressbookID", addressbookID).
 					Str("uid", uid).
 					Msg("failed to get contact in ldap multiget")
+				resp := common.Response{
+					Hrefs:  []common.Href{{Value: hrefStr}},
+					Status: &common.Status{Code: http.StatusNotFound},
+				}
+				resps = append(resps, resp)
 				continue
 			}
+
 			resps = append(resps, buildReportResponseLDAP(hrefStr, props, contact))
 			continue
 		}
@@ -132,18 +156,31 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 				Str("user", pr.UserID).
 				Str("addressbook", abURI).
 				Msg("ACL check failed in multiget")
+			resp := common.Response{
+				Hrefs:  []common.Href{{Value: hrefStr}},
+				Status: &common.Status{Code: http.StatusForbidden},
+			}
+			resps = append(resps, resp)
 			continue
 		}
+
 		contact, err := h.store.GetContact(r.Context(), addressbookID, uid)
 		if err != nil {
 			h.logger.Debug().Err(err).
 				Str("addressbookID", addressbookID).
 				Str("uid", uid).
 				Msg("failed to get contact in multiget")
+			resp := common.Response{
+				Hrefs:  []common.Href{{Value: hrefStr}},
+				Status: &common.Status{Code: http.StatusNotFound},
+			}
+			resps = append(resps, resp)
 			continue
 		}
+
 		resps = append(resps, buildReportResponse(hrefStr, props, contact))
 	}
+
 	ms := common.MultiStatus{Responses: resps}
 	if err := common.ServeMultiStatus(w, &ms); err != nil {
 		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for addressbook-multiget")
