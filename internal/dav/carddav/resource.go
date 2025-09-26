@@ -154,6 +154,8 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 		href := common.AddressbookPath(c.basePath, owner, collection)
 		ownerHref := common.PrincipalURL(c.basePath, owner)
 
+		var resps []common.Response
+
 		resp := common.Response{Hrefs: []common.Href{{Value: href}}}
 		_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Addressbook: &struct{}{}})
 		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: collection})
@@ -173,7 +175,30 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 			XMLName xml.Name `xml:"DAV: sync-token"`
 			Text    string   `xml:",chardata"`
 		}{Text: "seq:0"})
-		ms := common.MultiStatus{Responses: []common.Response{resp}}
+		resps = append(resps, resp)
+
+		if depth == "1" {
+			dir := c.handlers.addressbookDirs[collection]
+			if dir != nil {
+				contacts, err := dir.ListContacts(r.Context())
+				if err != nil {
+					c.handlers.logger.Error().Err(err).Str("collection", collection).Msg("failed to list LDAP contacts in PROPFIND")
+				} else {
+					for _, contact := range contacts {
+						contactHref := common.JoinURL(c.basePath, "addressbooks", owner, collection, contact.ID+".vcf")
+						contactResp := common.Response{Hrefs: []common.Href{{Value: contactHref}}}
+						_ = contactResp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/vcard; charset=utf-8"})
+						etag := computeStableETag(&contact)
+						if etag != "" {
+							_ = contactResp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(etag)})
+						}
+						resps = append(resps, contactResp)
+					}
+				}
+			}
+		}
+
+		ms := common.MultiStatus{Responses: resps}
 		_ = common.ServeMultiStatus(w, &ms)
 		return
 	}
@@ -201,8 +226,9 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 
 	href := common.AddressbookPath(c.basePath, owner, collection)
 	ownerHref := common.PrincipalURL(c.basePath, owner)
-
 	pr := common.MustPrincipal(r.Context())
+
+	var resps []common.Response
 
 	propResp := common.Response{
 		Hrefs: []common.Href{{Value: href}},
@@ -228,11 +254,9 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 	}
 
 	_ = propResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
-
 	_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
 		Privilege: []common.Privilege{{All: &struct{}{}}},
 	})
-
 	_ = propResp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
 
 	// CardDAV capabilities
@@ -247,7 +271,29 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 		Size    int      `xml:",chardata"`
 	}{Size: c.getMaxResourceSize()})
 
-	ms := common.MultiStatus{Responses: []common.Response{propResp}}
+	resps = append(resps, propResp)
+
+	if depth == "1" {
+		contacts, err := c.handlers.store.ListContacts(r.Context(), ab.ID)
+		if err != nil {
+			c.handlers.logger.Error().Err(err).Str("addressbook", ab.URI).Msg("failed to list contacts in PROPFIND collection")
+		} else {
+			for _, contact := range contacts {
+				contactHref := common.JoinURL(c.basePath, "addressbooks", owner, collection, contact.UID+".vcf")
+				contactResp := common.Response{Hrefs: []common.Href{{Value: contactHref}}}
+				_ = contactResp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/vcard; charset=utf-8"})
+				if contact.ETag != "" {
+					_ = contactResp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(contact.ETag)})
+				}
+				if !contact.UpdatedAt.IsZero() {
+					_ = contactResp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(contact.UpdatedAt.UTC())})
+				}
+				resps = append(resps, contactResp)
+			}
+		}
+	}
+
+	ms := common.MultiStatus{Responses: resps}
 	if err := common.ServeMultiStatus(w, &ms); err != nil {
 		c.handlers.logger.Error().Err(err).Msg("failed to serve MultiStatus for PROPFIND collection")
 	}
