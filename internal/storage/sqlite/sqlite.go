@@ -11,6 +11,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
+	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/rs/zerolog"
 )
 

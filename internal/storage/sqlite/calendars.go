@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/ncruces/go-sqlite3/driver"
+	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
