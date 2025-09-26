@@ -75,16 +75,8 @@ func main() {
 		UpdatedAt:   now,
 	}
 
-	switch s := store.(type) {
-	case interface {
-		CreateCalendar(c storage.Calendar, ownerGroup string, description string) error
-	}:
-		if err := s.CreateCalendar(cal, ownerGroup, desc); err != nil {
-			fmt.Fprintf(os.Stderr, "create calendar: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "backend does not support CreateCalendar helper\n")
+	if err := store.CreateCalendar(cal, ownerGroup, desc); err != nil {
+		fmt.Fprintf(os.Stderr, "create calendar: %v\n", err)
 		os.Exit(1)
 	}
 
