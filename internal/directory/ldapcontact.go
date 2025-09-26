@@ -131,7 +131,7 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error)
 	}
 	search := ldap.NewSearchRequest(
 		c.cfg.BaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(c.cfg.Timeout.Seconds()), false,
 		c.cfg.Filter,
 		c.attrsForFilter(),
 		nil,

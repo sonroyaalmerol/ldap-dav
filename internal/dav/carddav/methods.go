@@ -687,6 +687,8 @@ func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
+	h.logger.Debug().Str("request_body", string(body)).Msg("received request")
+
 	root := struct {
 		XMLName xml.Name
 	}{}
