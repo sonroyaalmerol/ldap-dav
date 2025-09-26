@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/sqlite"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage/sqlite/driver"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
@@ -94,8 +94,9 @@ func runMigrations(db *sql.DB, logger zerolog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("failed to create source driver: %w", err)
 	}
+	defer sourceDriver.Close()
 
-	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
+	driver, err := driver.WithInstance(db, &driver.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create database driver: %w", err)
 	}
@@ -109,7 +110,6 @@ func runMigrations(db *sql.DB, logger zerolog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}
-	defer m.Close()
 
 	version, dirty, err := m.Version()
 	if err != nil && err != migrate.ErrNilVersion {
