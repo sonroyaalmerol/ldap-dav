@@ -1,6 +1,8 @@
 package carddav
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -240,11 +242,7 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if strings.HasPrefix(addressbookID, "ldap_") {
-		ms := common.MultiStatus{
-			Responses: nil,
-			SyncToken: "seq:0",
-		}
-		_ = common.ServeMultiStatus(w, &ms)
+		h.handleLDAPSyncCollection(w, r, sc, abURI, addressbookID)
 		return
 	}
 
@@ -341,4 +339,111 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 	if err := common.ServeMultiStatus(w, &ms); err != nil {
 		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for sync-collection")
 	}
+}
+
+func (h *Handlers) handleLDAPSyncCollection(w http.ResponseWriter, r *http.Request, sc common.SyncCollection, abURI, addressbookID string) {
+	dir := h.addressbookDirs[abURI]
+	if dir == nil {
+		h.logger.Error().
+			Str("addressbookID", addressbookID).
+			Msg("failed to get ldap directory in sync-collection")
+		http.NotFound(w, r)
+		return
+	}
+
+	props := common.ParsePropRequest(sc.Prop)
+
+	currentContacts, err := dir.ListContacts(r.Context())
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("addressbookID", addressbookID).
+			Msg("failed to list ldap contacts in sync-collection")
+		http.Error(w, "ldap error", http.StatusInternalServerError)
+		return
+	}
+
+	currentContactMap := make(map[string]*directory.Contact)
+	currentETags := make(map[string]string)
+	for i := range currentContacts {
+		contact := &currentContacts[i]
+		currentContactMap[contact.ID] = contact
+		currentETags[contact.ID] = computeStableETag(contact)
+	}
+
+	var resps []common.Response
+	baseHref := r.URL.Path
+	if !strings.HasSuffix(baseHref, "/") {
+		baseHref += "/"
+	}
+
+	var previousETags map[string]string
+	if sc.SyncToken != "" && sc.SyncToken != "seq:0" {
+		previousETags = h.parseLDAPSyncToken(sc.SyncToken)
+	} else {
+		previousETags = make(map[string]string)
+	}
+
+	for uid, currentETag := range currentETags {
+		previousETag, existed := previousETags[uid]
+
+		if !existed || previousETag != currentETag {
+			hrefStr := baseHref + uid + ".vcf"
+			resp := buildReportResponseLDAP(hrefStr, props, currentContactMap[uid])
+			resps = append(resps, resp)
+		}
+	}
+
+	for uid := range previousETags {
+		if _, stillExists := currentETags[uid]; !stillExists {
+			hrefStr := baseHref + uid + ".vcf"
+			resp := common.Response{
+				Hrefs:  []common.Href{{Value: hrefStr}},
+				Status: &common.Status{Code: http.StatusNotFound},
+			}
+			resps = append(resps, resp)
+		}
+	}
+
+	newSyncToken := h.generateLDAPSyncToken(currentETags)
+
+	ms := common.MultiStatus{
+		Responses: resps,
+		SyncToken: newSyncToken,
+	}
+
+	if err := common.ServeMultiStatus(w, &ms); err != nil {
+		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for ldap sync-collection")
+	}
+}
+
+func (h *Handlers) parseLDAPSyncToken(token string) map[string]string {
+	if !strings.HasPrefix(token, "ldap:") {
+		return make(map[string]string)
+	}
+
+	encoded := token[5:]
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		h.logger.Debug().Err(err).Msg("failed to decode ldap sync token")
+		return make(map[string]string)
+	}
+
+	var etags map[string]string
+	if err := json.Unmarshal(decoded, &etags); err != nil {
+		h.logger.Debug().Err(err).Msg("failed to unmarshal ldap sync token")
+		return make(map[string]string)
+	}
+
+	return etags
+}
+
+func (h *Handlers) generateLDAPSyncToken(etags map[string]string) string {
+	jsonData, err := json.Marshal(etags)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to marshal ldap sync token")
+		return "ldap:error"
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(jsonData)
+	return "ldap:" + encoded
 }
