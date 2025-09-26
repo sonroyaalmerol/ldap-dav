@@ -21,7 +21,7 @@ type Store struct {
 }
 
 func New(dsn string, logger zerolog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", dsn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
