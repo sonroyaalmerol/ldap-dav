@@ -30,6 +30,11 @@ func New(dsn string, logger zerolog.Logger) (*Store, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
 
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
 	if err := configureSQLite(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to configure SQLite: %w", err)
@@ -37,7 +42,7 @@ func New(dsn string, logger zerolog.Logger) (*Store, error) {
 
 	store := &Store{db: db, logger: logger}
 
-	if err := runMigrations(dsn, logger); err != nil {
+	if err := runMigrations(db, logger); err != nil {
 		store.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
@@ -84,13 +89,7 @@ func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return tx.Commit()
 }
 
-func runMigrations(dsn string, logger zerolog.Logger) error {
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", dsn))
-	if err != nil {
-		return fmt.Errorf("failed to open database for migrations: %w", err)
-	}
-	defer db.Close()
-
+func runMigrations(db *sql.DB, logger zerolog.Logger) error {
 	sourceDriver, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create source driver: %w", err)
