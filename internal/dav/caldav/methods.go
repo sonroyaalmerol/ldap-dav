@@ -253,6 +253,13 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.deleteFreeBusyInfoForEvent(r.Context(), calURI, uid); err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("uid", obj.UID).
+			Msg("failed to cleanup old free/busy info")
+	}
+
 	if err := h.updateFreeBusyInfo(r.Context(), calURI, obj); err != nil {
 		h.logger.Error().Err(err).
 			Str("calendarID", calendarID).

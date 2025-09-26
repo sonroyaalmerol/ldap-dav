@@ -147,6 +147,9 @@ type Store interface {
 
 	ListSchedulingObjects(ctx context.Context, calendarID string) ([]*SchedulingObject, error)
 	DeleteSchedulingObject(ctx context.Context, calendarID, uid, recipient string) error
+	DeleteOldSchedulingObjects(ctx context.Context, cutoff time.Time) error
+	DeleteOldAttendeeResponses(ctx context.Context, cutoff time.Time) error
+	DeleteOldFreeBusyInfo(ctx context.Context, cutoff time.Time) error
 
 	UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error
 	StoreAttendeeResponse(ctx context.Context, response *AttendeeResponse) error

@@ -269,7 +269,69 @@ func (h *Handlers) deliverToInbox(ctx context.Context, attendee string, schedMsg
 		Status:     "pending",
 	}
 
-	return h.store.StoreSchedulingObject(ctx, schedObj)
+	if err := h.store.StoreSchedulingObject(ctx, schedObj); err != nil {
+		return err
+	}
+
+	if err := h.processSchedulingObjectInInbox(ctx, schedObj); err != nil {
+		h.logger.Error().Err(err).
+			Str("uid", schedObj.UID).
+			Str("recipient", attendee).
+			Msg("failed to process scheduling object in inbox")
+	}
+
+	return nil
+}
+
+func (h *Handlers) processSchedulingObjectInInbox(ctx context.Context, schedObj *storage.SchedulingObject) error {
+	switch schedObj.Method {
+	case "REQUEST":
+		h.logger.Debug().
+			Str("uid", schedObj.UID).
+			Str("recipient", schedObj.Recipient).
+			Msg("invitation delivered to inbox")
+
+	case "CANCEL":
+		// Auto-process cancellations by removing the event from attendee's calendar
+		if err := h.processCancellationInInbox(ctx, schedObj); err != nil {
+			return err
+		}
+
+		return h.cleanupSchedulingObject(ctx, schedObj)
+
+	case "REPLY":
+		return h.cleanupSchedulingObject(ctx, schedObj)
+	}
+
+	return nil
+}
+
+func (h *Handlers) processCancellationInInbox(ctx context.Context, schedObj *storage.SchedulingObject) error {
+	calendars, err := h.store.ListCalendarsByOwnerUser(ctx, schedObj.Recipient)
+	if err != nil {
+		return err
+	}
+
+	for _, cal := range calendars {
+		if strings.Contains(cal.URI, "inbox") || strings.Contains(cal.URI, "outbox") {
+			continue
+		}
+
+		if err := h.store.DeleteObject(ctx, cal.ID, schedObj.UID, ""); err == nil {
+			h.logger.Debug().
+				Str("uid", schedObj.UID).
+				Str("calendar", cal.URI).
+				Str("recipient", schedObj.Recipient).
+				Msg("removed canceled event from calendar")
+			break
+		}
+	}
+
+	return nil
+}
+
+func (h *Handlers) cleanupSchedulingObject(ctx context.Context, schedObj *storage.SchedulingObject) error {
+	return h.store.DeleteSchedulingObject(ctx, schedObj.CalendarID, schedObj.UID, schedObj.Recipient)
 }
 
 func (h *Handlers) deliverCancellationToInbox(ctx context.Context, attendee string, schedMsg *SchedulingMessage) error {

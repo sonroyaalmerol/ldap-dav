@@ -148,6 +148,35 @@ func (s *Store) DeleteSchedulingObject(ctx context.Context, calendarID, uid, rec
 	return nil
 }
 
+func (s *Store) DeleteOldSchedulingObjects(ctx context.Context, cutoff time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM scheduling_objects 
+		WHERE created_at < $1 AND (status = 'delivered' OR status = 'processed')
+	`, cutoff)
+	return err
+}
+
+func (s *Store) DeleteOldAttendeeResponses(ctx context.Context, cutoff time.Time) error {
+	// Delete responses for events that ended before the cutoff
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM attendee_responses 
+		WHERE created_at < $1 
+		AND event_uid IN (
+			SELECT uid FROM calendar_objects 
+			WHERE end_at IS NOT NULL AND end_at < $1
+		)
+	`, cutoff)
+	return err
+}
+
+func (s *Store) DeleteOldFreeBusyInfo(ctx context.Context, cutoff time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM freebusy_info 
+		WHERE end_time < $1
+	`, cutoff)
+	return err
+}
+
 // UpdateSchedulingObjectStatus updates the status of a scheduling object
 func (s *Store) UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error {
 	_, err := s.pool.Exec(ctx, `
