@@ -48,3 +48,23 @@ func (s *Store) GetFreeBusyInfo(ctx context.Context, userID string, start, end t
 func (s *Store) DeleteFreeBusyInfo(ctx context.Context, userID, eventUID string) error {
 	return nil
 }
+
+func (s *Store) GetSchedulingObject(ctx context.Context, calendarID, uid, recipient string) (*storage.SchedulingObject, error) {
+	return nil, nil
+}
+
+func (s *Store) DeleteSchedulingObject(ctx context.Context, calendarID, uid, recipient string) error {
+	return nil
+}
+
+func (s *Store) UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error {
+	return nil
+}
+
+func (s *Store) GetAttendeeResponse(ctx context.Context, eventUID, attendeeEmail string) (*storage.AttendeeResponse, error) {
+	return nil, nil
+}
+
+func (s *Store) GetPendingSchedulingObjects(ctx context.Context, limit int) ([]*storage.SchedulingObject, error) {
+	return nil, nil
+}

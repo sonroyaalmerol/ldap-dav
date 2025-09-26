@@ -143,12 +143,20 @@ type Store interface {
 	GetSchedulingOutbox(ctx context.Context, ownerUserID string) (*Calendar, error)
 
 	StoreSchedulingObject(ctx context.Context, obj *SchedulingObject) error
-	ListSchedulingObjects(ctx context.Context, calendarID string) ([]*SchedulingObject, error)
+	GetSchedulingObject(ctx context.Context, calendarID, uid, recipient string) (*SchedulingObject, error)
 
+	ListSchedulingObjects(ctx context.Context, calendarID string) ([]*SchedulingObject, error)
+	DeleteSchedulingObject(ctx context.Context, calendarID, uid, recipient string) error
+
+	UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error
 	StoreAttendeeResponse(ctx context.Context, response *AttendeeResponse) error
+
+	GetAttendeeResponse(ctx context.Context, eventUID, attendeeEmail string) (*AttendeeResponse, error)
 	ListAttendeeResponses(ctx context.Context, eventUID string) ([]*AttendeeResponse, error)
 
 	StoreFreeBusyInfo(ctx context.Context, info *FreeBusyInfo) error
 	GetFreeBusyInfo(ctx context.Context, userID string, start, end time.Time) ([]*FreeBusyInfo, error)
 	DeleteFreeBusyInfo(ctx context.Context, userID, eventUID string) error
+
+	GetPendingSchedulingObjects(ctx context.Context, limit int) ([]*SchedulingObject, error)
 }
