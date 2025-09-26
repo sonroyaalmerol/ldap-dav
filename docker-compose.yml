@@ -18,23 +18,6 @@ services:
       timeout: 5s
       retries: 30
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: postgres
-    environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_DB: caldav
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d caldav"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-
   ldap-dav:
     image: ghcr.io/sonroyaalmerol/ldap-dav:latest
     container_name: ldap-dav
@@ -75,12 +58,8 @@ services:
       AUTH_INTROSPECT_URL: ""
       AUTH_INTROSPECT_AUTH: ""
 
-      # Postgres
-      PG_URL: "postgres://postgres:postgres@postgres:5432/caldav?sslmode=disable"
-
       # Storage backend
-      STORAGE_TYPE: "postgres"    # or "filestore"
-      FILE_ROOT: "/data"          # used only if STORAGE_TYPE=filestore
+      STORAGE_TYPE: "sqlite"    # or "postgres"
 
     ports:
       - "8080:8080"

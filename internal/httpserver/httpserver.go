@@ -14,8 +14,8 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/router"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
-	"github.com/sonroyaalmerol/ldap-dav/internal/storage/filestore"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage/postgres"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage/sqlite"
 )
 
 type Server struct {
@@ -31,19 +31,8 @@ func NewServer(cfg *config.Config, logger zerolog.Logger) (*Server, func(), erro
 	switch cfg.Storage.Type {
 	case "postgres":
 		store, err = postgres.New(cfg.Storage.PostgresURL, logger)
-	case "filestore":
-		fslog := func(msg string, kv ...any) {
-			ev := logger.Debug().Str("component", "filestore").Str("msg", msg)
-			for i := 0; i+1 < len(kv); i += 2 {
-				k, ok := kv[i].(string)
-				if !ok {
-					continue
-				}
-				ev = ev.Interface(k, kv[i+1])
-			}
-			ev.Send()
-		}
-		store, err = filestore.New(cfg.Storage.FileRoot, fslog)
+	case "sqlite":
+		store, err = sqlite.New(cfg.Storage.SQLitePath, logger)
 	default:
 		err = errors.New("unknown storage type: " + cfg.Storage.Type)
 	}

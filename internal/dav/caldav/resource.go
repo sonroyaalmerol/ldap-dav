@@ -199,7 +199,7 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 	var trueOwner string
 	isSharedMount := false
 	if cal == nil && collection != "shared" {
-		if sc, err := c.handlers.findCalendarByURI(r.Context(), collection); err == nil && sc != nil {
+		if sc, err := c.handlers.store.GetCalendarByURI(r.Context(), collection); err == nil && sc != nil {
 			pr := common.MustPrincipal(r.Context())
 			if ok, err := c.handlers.aclCheckRead(r.Context(), pr, sc.URI, sc.OwnerUserID); err == nil && ok {
 				cal = sc

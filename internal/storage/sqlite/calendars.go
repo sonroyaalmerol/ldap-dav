@@ -1,4 +1,4 @@
-package postgres
+package sqlite
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
+	_ "modernc.org/sqlite"
 )
 
 func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, description string) error {
@@ -48,37 +48,41 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 		desc = c.Description
 	}
 
-	_, err := s.pool.Exec(ctx, `
-        insert into calendars (
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO calendars (
           id, owner_user_id, owner_group, uri, display_name, description, color,
           ctag, created_at, updated_at, sync_seq, sync_token
-        ) values (
-          $1::uuid, $2, $3, $4, $5, $6, $7,
-          $8, $9, $9, 0, 'seq:0'
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, 0, 'seq:0'
         )
-    `, id, ownerUser, grp, uri, displayName, desc, color, ctag, now)
+    `, id, ownerUser, grp, uri, displayName, desc, color, ctag, now, now)
 	return err
 }
 
 func (s *Store) DeleteCalendar(ownerUserID, calURI string) error {
 	ctx := context.Background()
-	cmdTag, err := s.pool.Exec(ctx, `
-		delete from calendars
-		where owner_user_id = $1 and uri = $2
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM calendars
+		WHERE owner_user_id = ? AND uri = ?
 	`, ownerUserID, calURI)
 	if err != nil {
 		return err
 	}
-	if cmdTag.RowsAffected() == 0 {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
 		return sql.ErrNoRows
 	}
 	return nil
 }
 
 func (s *Store) GetCalendarByURI(ctx context.Context, uri string) (*storage.Calendar, error) {
-	row := s.pool.QueryRow(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
-        from calendars where uri = $1`, uri)
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        FROM calendars WHERE uri = ?`, uri)
 	var c storage.Calendar
 	if err := row.Scan(&c.ID, &c.OwnerUserID, &c.OwnerGroup, &c.URI, &c.DisplayName, &c.Description, &c.Color, &c.CTag, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
@@ -87,18 +91,18 @@ func (s *Store) GetCalendarByURI(ctx context.Context, uri string) (*storage.Cale
 }
 
 func (s *Store) UpdateCalendarDisplayName(ctx context.Context, ownerUID, calURI string, displayName *string) error {
-	_, err := s.pool.Exec(ctx, `
-		update calendars
-		set display_name = $1, updated_at = now()
-		where owner_user_id = $2 and uri = $3
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE calendars
+		SET display_name = ?, updated_at = datetime('now')
+		WHERE owner_user_id = ? AND uri = ?
 	`, displayName, ownerUID, calURI)
 	return err
 }
 
 func (s *Store) ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*storage.Calendar, error) {
-	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
-        from calendars where owner_user_id = $1`, uid)
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        FROM calendars WHERE owner_user_id = ?`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +119,9 @@ func (s *Store) ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*st
 }
 
 func (s *Store) ListAllCalendars(ctx context.Context) ([]*storage.Calendar, error) {
-	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
-        from calendars`)
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, color, ctag, created_at, updated_at
+        FROM calendars`)
 	if err != nil {
 		return nil, err
 	}
@@ -134,18 +138,18 @@ func (s *Store) ListAllCalendars(ctx context.Context) ([]*storage.Calendar, erro
 }
 
 func (s *Store) UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color string) error {
-	_, err := s.pool.Exec(ctx, `
-        update calendars
-        set color = $1, updated_at = now()
-        where owner_user_id = $2 and uri = $3
+	_, err := s.db.ExecContext(ctx, `
+        UPDATE calendars
+        SET color = ?, updated_at = datetime('now')
+        WHERE owner_user_id = ? AND uri = ?
     `, color, ownerUID, calURI)
 	return err
 }
 
 func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
-	row := s.pool.QueryRow(ctx, `
-		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-		from calendar_objects where calendar_id::text = $1 and uid = $2`, calendarID, uid)
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
+		FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid)
 	var o storage.Object
 	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
 		return nil, err
@@ -160,55 +164,55 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 	if obj.ETag == "" {
 		obj.ETag = randID()
 	}
-	_, err := s.pool.Exec(ctx, `
-		insert into calendar_objects (
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO calendar_objects (
 			id, calendar_id, uid, etag, data, component, start_at, end_at
-		) values (
-			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?
 		)
-		on conflict (calendar_id, uid) do update set
+		ON CONFLICT(calendar_id, uid) DO UPDATE SET
 			etag = excluded.etag,
 			data = excluded.data,
 			component = excluded.component,
 			start_at = excluded.start_at,
 			end_at = excluded.end_at,
-			updated_at = now()
+			updated_at = datetime('now')
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
 	return err
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
 	if etag == "" {
-		_, err := s.pool.Exec(ctx, `
-			delete from calendar_objects where calendar_id::text = $1 and uid = $2
+		_, err := s.db.ExecContext(ctx, `
+			DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ?
 		`, calendarID, uid)
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `
-		delete from calendar_objects where calendar_id::text = $1 and uid = $2 and etag = $3
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ? AND etag = ?
 	`, calendarID, uid, etag)
 	return err
 }
 
 func (s *Store) ListObjects(ctx context.Context, calendarID string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
 	q := `
-		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-		from calendar_objects
-		where calendar_id::text = $1`
-	args := []any{calendarID}
+		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
+		FROM calendar_objects
+		WHERE calendar_id = ?`
+	args := []interface{}{calendarID}
 	if start != nil {
-		q += " and (start_at is null or end_at >= $2)"
+		q += " AND (start_at IS NULL OR end_at >= ?)"
 		args = append(args, *start)
 		if end != nil {
-			q += " and (end_at is null or start_at <= $3)"
+			q += " AND (end_at IS NULL OR start_at <= ?)"
 			args = append(args, *end)
 		}
 	} else if end != nil {
-		q += " and (start_at is null or start_at <= $2)"
+		q += " AND (start_at IS NULL OR start_at <= ?)"
 		args = append(args, *end)
 	}
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +231,7 @@ func (s *Store) ListObjects(ctx context.Context, calendarID string, start *time.
 
 func (s *Store) NewCTag(ctx context.Context, calendarID string) (string, error) {
 	ctag := randID()
-	_, err := s.pool.Exec(ctx, `update calendars set ctag = $1, updated_at = now() where id::text = $2`, ctag, calendarID)
+	_, err := s.db.ExecContext(ctx, `UPDATE calendars SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, calendarID)
 	return ctag, err
 }
 
@@ -239,27 +243,34 @@ func randID() string {
 
 func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, components []string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
 	q := `
-		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-		from calendar_objects
-		where calendar_id::text = $1`
-	args := []any{calendarID}
+		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
+		FROM calendar_objects
+		WHERE calendar_id = ?`
+	args := []interface{}{calendarID}
 
 	if len(components) > 0 {
-		q += " and component = any($2)"
-		args = append(args, components)
+		placeholders := make([]string, len(components))
+		for i, component := range components {
+			placeholders[i] = "?"
+			args = append(args, component)
+		}
+		q += " AND component IN (" + fmt.Sprintf("%s", placeholders[0])
+		for i := 1; i < len(placeholders); i++ {
+			q += ", " + placeholders[i]
+		}
+		q += ")"
 	}
-	argPos := len(args) + 1
+
 	if start != nil {
-		q += " and (start_at is null or end_at >= $" + strconv.FormatInt(int64(argPos), 10) + ")"
+		q += " AND (start_at IS NULL OR end_at >= ?)"
 		args = append(args, *start)
-		argPos++
 	}
 	if end != nil {
-		q += " and (end_at is null or start_at <= $" + strconv.FormatInt(int64(argPos), 10) + ")"
+		q += " AND (end_at IS NULL OR start_at <= ?)"
 		args = append(args, *end)
 	}
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +288,8 @@ func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, c
 }
 
 func (s *Store) GetSyncInfo(ctx context.Context, calendarID string) (string, int64, error) {
-	row := s.pool.QueryRow(ctx, `
-		select sync_token, sync_seq from calendars where id::text = $1
+	row := s.db.QueryRowContext(ctx, `
+		SELECT sync_token, sync_seq FROM calendars WHERE id = ?
 	`, calendarID)
 	var token string
 	var seq int64
@@ -290,30 +301,17 @@ func (s *Store) GetSyncInfo(ctx context.Context, calendarID string) (string, int
 
 func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSeq int64, limit int) ([]storage.Change, int64, error) {
 	q := `
-		select seq, uid, deleted
-		from calendar_changes
-		where calendar_id::text = $1 and seq > $2
-		order by seq asc`
+		SELECT seq, uid, deleted
+		FROM calendar_changes
+		WHERE calendar_id = ? AND seq > ?
+		ORDER BY seq ASC`
+	args := []interface{}{calendarID, sinceSeq}
 	if limit > 0 {
-		q += " limit $3"
-		rows, err := s.pool.Query(ctx, q, calendarID, sinceSeq, limit)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer rows.Close()
-		var out []storage.Change
-		var last int64 = sinceSeq
-		for rows.Next() {
-			var c storage.Change
-			if err := rows.Scan(&c.Seq, &c.UID, &c.Deleted); err != nil {
-				return nil, 0, err
-			}
-			out = append(out, c)
-			last = c.Seq
-		}
-		return out, last, nil
+		q += " LIMIT ?"
+		args = append(args, limit)
 	}
-	rows, err := s.pool.Query(ctx, q, calendarID, sinceSeq)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -332,41 +330,36 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 }
 
 func (s *Store) RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (string, int64, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 
 	// increment seq and get new values
 	var newSeq int64
-	err = tx.QueryRow(ctx, `
-		update calendars
-		set sync_seq = sync_seq + 1,
-		    sync_token = 'seq:' || (sync_seq + 1)
-		where id::text = $1
-		returning sync_seq, sync_token
-	`, calendarID).Scan(&newSeq, new(string)) // temporary placeholder
-	if err != nil {
-		return "", 0, err
-	}
-
 	var newToken string
-	err = tx.QueryRow(ctx, `select sync_token from calendars where id::text = $1`, calendarID).Scan(&newToken)
+	err = tx.QueryRowContext(ctx, `
+		UPDATE calendars
+		SET sync_seq = sync_seq + 1,
+		    sync_token = 'seq:' || (sync_seq + 1)
+		WHERE id = ?
+		RETURNING sync_seq, sync_token
+	`, calendarID).Scan(&newSeq, &newToken)
 	if err != nil {
 		return "", 0, err
 	}
 
 	// insert change row
-	_, err = tx.Exec(ctx, `
-		insert into calendar_changes(calendar_id, seq, uid, deleted)
-		values ($1::uuid, $2, $3, $4)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO calendar_changes(calendar_id, seq, uid, deleted)
+		VALUES (?, ?, ?, ?)
 	`, calendarID, newSeq, uid, deleted)
 	if err != nil {
 		return "", 0, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return "", 0, err
 	}
 	return newToken, newSeq, nil

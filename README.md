@@ -140,9 +140,8 @@ LDAP_ADDRESSBOOK_FILTER_1_FILTER="(&(objectClass=person)(department=IT))"
 - `AUTH_INTROSPECT_AUTH`: Authorization header for introspection requests
 
 ### Storage
-- `STORAGE_TYPE`: Storage backend - `postgres|filestore` (default `postgres`)
+- `STORAGE_TYPE`: Storage backend - `postgres|sqlite` (default `postgres`)
 - `PG_URL`: PostgreSQL connection string (default `postgres://postgres:postgres@localhost:5432/caldav?sslmode=disable`)
-- `FILE_ROOT`: File storage root directory (default `./data`) - used only with filestore backend
 
 ### ICS Generation
 - `ICS_COMPANY_NAME`: Company name in generated ICS files (default `LDAP DAV`)

@@ -62,7 +62,7 @@ type Store interface {
 	// Calendars
 	CreateCalendar(c Calendar, ownerGroup string, description string) error
 	DeleteCalendar(ownerUserID, calURI string) error
-	GetCalendarByID(ctx context.Context, id string) (*Calendar, error)
+	GetCalendarByURI(ctx context.Context, uri string) (*Calendar, error)
 	UpdateCalendarDisplayName(ctx context.Context, ownerUID, calURI string, displayName *string) error
 	ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*Calendar, error)
 	ListAllCalendars(ctx context.Context) ([]*Calendar, error)
@@ -82,7 +82,7 @@ type Store interface {
 
 	CreateAddressbook(a Addressbook, ownerGroup string, description string) error
 	DeleteAddressbook(ownerUserID, abURI string) error
-	GetAddressbookByID(ctx context.Context, id string) (*Addressbook, error)
+	GetAddressbookByURI(ctx context.Context, uri string) (*Addressbook, error)
 	UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abURI string, displayName *string) error
 	ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*Addressbook, error)
 	ListAllAddressbooks(ctx context.Context) ([]*Addressbook, error)

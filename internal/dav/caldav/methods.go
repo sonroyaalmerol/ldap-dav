@@ -367,7 +367,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
-	cals, err := h.store.ListCalendarsByOwnerUser(ctx, owner)
+	cal, err := h.store.GetCalendarByURI(ctx, uri)
 	if err != nil {
 		h.logger.Error().Err(err).
 			Str("owner", owner).
@@ -375,12 +375,7 @@ func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
 			Msg("failed to check if calendar exists")
 		return false
 	}
-	for _, c := range cals {
-		if c.URI == uri {
-			return true
-		}
-	}
-	return false
+	return cal != nil && cal.OwnerUserID == owner
 }
 
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {

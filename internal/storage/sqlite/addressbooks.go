@@ -1,8 +1,7 @@
-package postgres
+package sqlite
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
@@ -15,27 +14,27 @@ func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, desc
 		a.CTag = randID()
 	}
 
-	_, err := s.pool.Exec(context.Background(), `
-		insert into addressbooks (
+	_, err := s.db.ExecContext(context.Background(), `
+		INSERT INTO addressbooks (
 			id, owner_user_id, owner_group, uri, display_name, description, ctag
-		) values (
-			$1::uuid, $2, $3, $4, $5, $6, $7
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?
 		)
 	`, a.ID, a.OwnerUserID, ownerGroup, a.URI, a.DisplayName, description, a.CTag)
 	return err
 }
 
 func (s *Store) DeleteAddressbook(ownerUserID, abURI string) error {
-	_, err := s.pool.Exec(context.Background(), `
-		delete from addressbooks where owner_user_id = $1 and uri = $2
+	_, err := s.db.ExecContext(context.Background(), `
+		DELETE FROM addressbooks WHERE owner_user_id = ? AND uri = ?
 	`, ownerUserID, abURI)
 	return err
 }
 
 func (s *Store) GetAddressbookByURI(ctx context.Context, uri string) (*storage.Addressbook, error) {
-	row := s.pool.QueryRow(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-        from addressbooks where uri = $1`, uri)
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
+        FROM addressbooks WHERE uri = ?`, uri)
 	var a storage.Addressbook
 	if err := row.Scan(&a.ID, &a.OwnerUserID, &a.OwnerGroup, &a.URI, &a.DisplayName, &a.Description, &a.CTag, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
@@ -44,18 +43,18 @@ func (s *Store) GetAddressbookByURI(ctx context.Context, uri string) (*storage.A
 }
 
 func (s *Store) UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abURI string, displayName *string) error {
-	_, err := s.pool.Exec(ctx, `
-		update addressbooks
-		set display_name = $1, updated_at = now()
-		where owner_user_id = $2 and uri = $3
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE addressbooks
+		SET display_name = ?, updated_at = datetime('now')
+		WHERE owner_user_id = ? AND uri = ?
 	`, displayName, ownerUID, abURI)
 	return err
 }
 
 func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*storage.Addressbook, error) {
-	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-        from addressbooks where owner_user_id = $1`, uid)
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
+        FROM addressbooks WHERE owner_user_id = ?`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +71,9 @@ func (s *Store) ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]
 }
 
 func (s *Store) ListAllAddressbooks(ctx context.Context) ([]*storage.Addressbook, error) {
-	rows, err := s.pool.Query(ctx, `
-        select id::text, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
-        from addressbooks`)
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, owner_user_id, owner_group, uri, display_name, description, ctag, created_at, updated_at
+        FROM addressbooks`)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +90,9 @@ func (s *Store) ListAllAddressbooks(ctx context.Context) ([]*storage.Addressbook
 }
 
 func (s *Store) GetContact(ctx context.Context, addressbookID, uid string) (*storage.Contact, error) {
-	row := s.pool.QueryRow(ctx, `
-		select id::text, addressbook_id::text, uid, etag, data, updated_at
-		from contacts where addressbook_id::text = $1 and uid = $2`, addressbookID, uid)
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, addressbook_id, uid, etag, data, updated_at
+		FROM contacts WHERE addressbook_id = ? AND uid = ?`, addressbookID, uid)
 	var c storage.Contact
 	if err := row.Scan(&c.ID, &c.AddressbookID, &c.UID, &c.ETag, &c.Data, &c.UpdatedAt); err != nil {
 		return nil, err
@@ -108,38 +107,38 @@ func (s *Store) PutContact(ctx context.Context, c *storage.Contact) error {
 	if c.ETag == "" {
 		c.ETag = randID()
 	}
-	_, err := s.pool.Exec(ctx, `
-		insert into contacts (
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO contacts (
 			id, addressbook_id, uid, etag, data
-		) values (
-			$1::uuid, $2::uuid, $3, $4, $5
+		) VALUES (
+			?, ?, ?, ?, ?
 		)
-		on conflict (addressbook_id, uid) do update set
+		ON CONFLICT (addressbook_id, uid) DO UPDATE SET
 			etag = excluded.etag,
 			data = excluded.data,
-			updated_at = now()
+			updated_at = datetime('now')
 	`, c.ID, c.AddressbookID, c.UID, c.ETag, c.Data)
 	return err
 }
 
 func (s *Store) DeleteContact(ctx context.Context, addressbookID, uid string, etag string) error {
 	if etag == "" {
-		_, err := s.pool.Exec(ctx, `
-			delete from contacts where addressbook_id::text = $1 and uid = $2
+		_, err := s.db.ExecContext(ctx, `
+			DELETE FROM contacts WHERE addressbook_id = ? AND uid = ?
 		`, addressbookID, uid)
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `
-		delete from contacts where addressbook_id::text = $1 and uid = $2 and etag = $3
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM contacts WHERE addressbook_id = ? AND uid = ? AND etag = ?
 	`, addressbookID, uid, etag)
 	return err
 }
 
 func (s *Store) ListContacts(ctx context.Context, addressbookID string) ([]*storage.Contact, error) {
-	rows, err := s.pool.Query(ctx, `
-		select id::text, addressbook_id::text, uid, etag, data, updated_at
-		from contacts
-		where addressbook_id::text = $1`, addressbookID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, addressbook_id, uid, etag, data, updated_at
+		FROM contacts
+		WHERE addressbook_id = ?`, addressbookID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,19 +157,19 @@ func (s *Store) ListContacts(ctx context.Context, addressbookID string) ([]*stor
 
 func (s *Store) ListContactsByFilter(ctx context.Context, addressbookID string, propNames []string) ([]*storage.Contact, error) {
 	q := `
-		select id::text, addressbook_id::text, uid, etag, data, updated_at
-		from contacts
-		where addressbook_id::text = $1`
-	args := []any{addressbookID}
+		SELECT id, addressbook_id, uid, etag, data, updated_at
+		FROM contacts
+		WHERE addressbook_id = ?`
+	args := []interface{}{addressbookID}
 
 	if len(propNames) > 0 {
-		for i, prop := range propNames {
-			q += fmt.Sprintf(" and data ilike $%d", i+2)
+		for _, prop := range propNames {
+			q += " AND data LIKE ?"
 			args = append(args, "%"+prop+"%")
 		}
 	}
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -189,13 +188,13 @@ func (s *Store) ListContactsByFilter(ctx context.Context, addressbookID string, 
 
 func (s *Store) NewAddressbookCTag(ctx context.Context, addressbookID string) (string, error) {
 	ctag := randID()
-	_, err := s.pool.Exec(ctx, `update addressbooks set ctag = $1, updated_at = now() where id::text = $2`, ctag, addressbookID)
+	_, err := s.db.ExecContext(ctx, `UPDATE addressbooks SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, addressbookID)
 	return ctag, err
 }
 
 func (s *Store) GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (string, int64, error) {
-	row := s.pool.QueryRow(ctx, `
-		select sync_token, sync_seq from addressbooks where id::text = $1
+	row := s.db.QueryRowContext(ctx, `
+		SELECT sync_token, sync_seq FROM addressbooks WHERE id = ?
 	`, addressbookID)
 	var token string
 	var seq int64
@@ -207,30 +206,17 @@ func (s *Store) GetAddressbookSyncInfo(ctx context.Context, addressbookID string
 
 func (s *Store) ListAddressbookChangesSince(ctx context.Context, addressbookID string, sinceSeq int64, limit int) ([]storage.Change, int64, error) {
 	q := `
-		select seq, uid, deleted
-		from addressbook_changes
-		where addressbook_id::text = $1 and seq > $2
-		order by seq asc`
+		SELECT seq, uid, deleted
+		FROM addressbook_changes
+		WHERE addressbook_id = ? AND seq > ?
+		ORDER BY seq ASC`
+	args := []interface{}{addressbookID, sinceSeq}
 	if limit > 0 {
-		q += " limit $3"
-		rows, err := s.pool.Query(ctx, q, addressbookID, sinceSeq, limit)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer rows.Close()
-		var out []storage.Change
-		var last int64 = sinceSeq
-		for rows.Next() {
-			var c storage.Change
-			if err := rows.Scan(&c.Seq, &c.UID, &c.Deleted); err != nil {
-				return nil, 0, err
-			}
-			out = append(out, c)
-			last = c.Seq
-		}
-		return out, last, nil
+		q += " LIMIT ?"
+		args = append(args, limit)
 	}
-	rows, err := s.pool.Query(ctx, q, addressbookID, sinceSeq)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -249,41 +235,36 @@ func (s *Store) ListAddressbookChangesSince(ctx context.Context, addressbookID s
 }
 
 func (s *Store) RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (string, int64, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 
 	// increment seq and get new values
 	var newSeq int64
-	err = tx.QueryRow(ctx, `
-		update addressbooks
-		set sync_seq = sync_seq + 1,
-		    sync_token = 'seq:' || (sync_seq + 1)
-		where id::text = $1
-		returning sync_seq, sync_token
-	`, addressbookID).Scan(&newSeq, new(string)) // temporary placeholder
-	if err != nil {
-		return "", 0, err
-	}
-
 	var newToken string
-	err = tx.QueryRow(ctx, `select sync_token from addressbooks where id::text = $1`, addressbookID).Scan(&newToken)
+	err = tx.QueryRowContext(ctx, `
+		UPDATE addressbooks
+		SET sync_seq = sync_seq + 1,
+		    sync_token = 'seq:' || (sync_seq + 1)
+		WHERE id = ?
+		RETURNING sync_seq, sync_token
+	`, addressbookID).Scan(&newSeq, &newToken)
 	if err != nil {
 		return "", 0, err
 	}
 
 	// insert change row
-	_, err = tx.Exec(ctx, `
-		insert into addressbook_changes(addressbook_id, seq, uid, deleted)
-		values ($1::uuid, $2, $3, $4)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO addressbook_changes(addressbook_id, seq, uid, deleted)
+		VALUES (?, ?, ?, ?)
 	`, addressbookID, newSeq, uid, deleted)
 	if err != nil {
 		return "", 0, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return "", 0, err
 	}
 	return newToken, newSeq, nil

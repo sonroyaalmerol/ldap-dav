@@ -9,8 +9,8 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/internal/config"
 	"github.com/sonroyaalmerol/ldap-dav/internal/logging"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
-	"github.com/sonroyaalmerol/ldap-dav/internal/storage/filestore"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage/postgres"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage/sqlite"
 )
 
 func main() {
@@ -50,17 +50,8 @@ func main() {
 	switch cfg.Storage.Type {
 	case "postgres":
 		store, err = postgres.New(cfg.Storage.PostgresURL, logger)
-	case "filestore":
-		fslog := func(msg string, kv ...any) {
-			ev := logger.Debug().Str("component", "filestore").Str("msg", msg)
-			for i := 0; i+1 < len(kv); i += 2 {
-				if k, ok := kv[i].(string); ok {
-					ev = ev.Interface(k, kv[i+1])
-				}
-			}
-			ev.Send()
-		}
-		store, err = filestore.New(cfg.Storage.FileRoot, fslog)
+	case "sqlite":
+		store, err = sqlite.New(cfg.Storage.SQLitePath, logger)
 	default:
 		err = fmt.Errorf("unknown storage type: %s", cfg.Storage.Type)
 	}
@@ -88,7 +79,6 @@ func main() {
 	case interface {
 		CreateCalendar(c storage.Calendar, ownerGroup string, description string) error
 	}:
-		// filestore and postgres both implement this helper signature as requested
 		if err := s.CreateCalendar(cal, ownerGroup, desc); err != nil {
 			fmt.Fprintf(os.Stderr, "create calendar: %v\n", err)
 			os.Exit(1)

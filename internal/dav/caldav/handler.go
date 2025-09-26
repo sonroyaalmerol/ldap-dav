@@ -57,7 +57,7 @@ func (h *Handlers) ensurePersonalCalendar(ctx context.Context, ownerUID string) 
 		UpdatedAt:   now,
 	}
 
-	if existingCal, err := h.findCalendarByURI(ctx, calURI); err != nil || existingCal == nil {
+	if existingCal, err := h.store.GetCalendarByURI(ctx, calURI); err != nil || existingCal == nil {
 		if err := h.store.CreateCalendar(cal, "", "Personal Calendar"); err != nil {
 			h.logger.Error().Err(err).
 				Str("user", ownerUID).
@@ -95,6 +95,12 @@ func (h *Handlers) mustCanRead(w http.ResponseWriter, ctx context.Context, pr *a
 }
 
 func (h *Handlers) loadCalendarByOwnerURI(ctx context.Context, ownerUID, calURI string) (*storage.Calendar, error) {
+	if cal, err := h.store.GetCalendarByURI(ctx, calURI); err == nil && cal != nil {
+		if cal.OwnerUserID == ownerUID {
+			return cal, nil
+		}
+	}
+
 	cals, err := h.store.ListCalendarsByOwnerUser(ctx, ownerUID)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -113,11 +119,12 @@ func (h *Handlers) loadCalendarByOwnerURI(ctx context.Context, ownerUID, calURI 
 
 func (h *Handlers) resolveCalendar(ctx context.Context, owner, calURI string) (string, string, error) {
 	if calURI != "" && calURI != "shared" {
+		if cal, err := h.store.GetCalendarByURI(ctx, calURI); err == nil && cal != nil {
+			return cal.ID, cal.OwnerUserID, nil
+		}
+
 		if cal, err := h.loadCalendarByOwnerURI(ctx, owner, calURI); err == nil && cal != nil {
 			return cal.ID, owner, nil
-		}
-		if cal, err := h.findCalendarByURI(ctx, calURI); err == nil && cal != nil {
-			return cal.ID, cal.OwnerUserID, nil
 		}
 	}
 	h.logger.Debug().
@@ -125,22 +132,6 @@ func (h *Handlers) resolveCalendar(ctx context.Context, owner, calURI string) (s
 		Str("calendar", calURI).
 		Msg("calendar not found in resolveCalendar")
 	return "", "", errors.New("calendar not found")
-}
-
-func (h *Handlers) findCalendarByURI(ctx context.Context, uri string) (*storage.Calendar, error) {
-	all, err := h.store.ListAllCalendars(ctx)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("calendar", uri).
-			Msg("failed to list all calendars")
-		return nil, err
-	}
-	for _, c := range all {
-		if c.URI == uri {
-			return c, nil
-		}
-	}
-	return nil, errors.New("not found")
 }
 
 func (h *Handlers) aclCheckRead(ctx context.Context, pr *auth.Principal, calURI, calOwner string) (bool, error) {

@@ -58,7 +58,7 @@ type AuthConfig struct {
 type StorageConfig struct {
 	Type        string
 	PostgresURL string
-	FileRoot    string
+	SQLitePath  string
 }
 
 type Config struct {
@@ -167,9 +167,9 @@ func Load() (*Config, error) {
 			IntrospectAuthHeader: getenv("AUTH_INTROSPECT_AUTH", ""),
 		},
 		Storage: StorageConfig{
-			Type:        getenv("STORAGE_TYPE", "postgres"), // postgres | filestore
+			Type:        getenv("STORAGE_TYPE", "postgres"), // postgres | sqlite
 			PostgresURL: getenv("PG_URL", "postgres://postgres:postgres@localhost:5432/caldav?sslmode=disable"),
-			FileRoot:    getenv("FILE_ROOT", "./data"),
+			SQLitePath:  getenv("SQLITE_PATH", "/data/db.sql"),
 		},
 		ICS: ICSConfig{
 			CompanyName: getenv("ICS_COMPANY_NAME", "LDAP DAV"),
