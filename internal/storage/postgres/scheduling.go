@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -89,25 +88,6 @@ func (s *Store) StoreSchedulingObject(ctx context.Context, obj *storage.Scheduli
 	return err
 }
 
-// GetSchedulingObject retrieves a scheduling object
-func (s *Store) GetSchedulingObject(ctx context.Context, calendarID, uid, recipient string) (*storage.SchedulingObject, error) {
-	row := s.pool.QueryRow(ctx, `
-		select id::text, calendar_id::text, uid, etag, data, method, 
-			   recipient, originator, status, created_at, updated_at
-		from scheduling_objects 
-		where calendar_id::text = $1 and uid = $2 and recipient = $3
-	`, calendarID, uid, recipient)
-
-	var obj storage.SchedulingObject
-	err := row.Scan(&obj.ID, &obj.CalendarID, &obj.UID, &obj.ETag, &obj.Data,
-		&obj.Method, &obj.Recipient, &obj.Originator, &obj.Status,
-		&obj.CreatedAt, &obj.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &obj, nil
-}
-
 // ListSchedulingObjects lists scheduling objects in a calendar (inbox/outbox)
 func (s *Store) ListSchedulingObjects(ctx context.Context, calendarID string) ([]*storage.SchedulingObject, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -135,31 +115,6 @@ func (s *Store) ListSchedulingObjects(ctx context.Context, calendarID string) ([
 	return out, nil
 }
 
-// DeleteSchedulingObject removes a scheduling object
-func (s *Store) DeleteSchedulingObject(ctx context.Context, calendarID, uid, recipient string) error {
-	cmdTag, err := s.pool.Exec(ctx, `
-		delete from scheduling_objects
-		where calendar_id::text = $1 and uid = $2 and recipient = $3
-	`, calendarID, uid, recipient)
-	if err != nil {
-		return err
-	}
-	if cmdTag.RowsAffected() == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
-// UpdateSchedulingObjectStatus updates the status of a scheduling object
-func (s *Store) UpdateSchedulingObjectStatus(ctx context.Context, calendarID, uid, recipient, status string) error {
-	_, err := s.pool.Exec(ctx, `
-		update scheduling_objects
-		set status = $1, updated_at = now()
-		where calendar_id::text = $2 and uid = $3 and recipient = $4
-	`, status, calendarID, uid, recipient)
-	return err
-}
-
 // StoreAttendeeResponse stores an attendee's response to an invitation
 func (s *Store) StoreAttendeeResponse(ctx context.Context, response *storage.AttendeeResponse) error {
 	if response.ID == "" {
@@ -180,25 +135,6 @@ func (s *Store) StoreAttendeeResponse(ctx context.Context, response *storage.Att
 	`, response.ID, response.EventUID, response.CalendarID, response.AttendeeEmail,
 		response.ResponseStatus, response.ResponseData, time.Now().UTC())
 	return err
-}
-
-// GetAttendeeResponse retrieves an attendee's response
-func (s *Store) GetAttendeeResponse(ctx context.Context, eventUID, attendeeEmail string) (*storage.AttendeeResponse, error) {
-	row := s.pool.QueryRow(ctx, `
-		select id::text, event_uid, calendar_id::text, attendee_email,
-			   response_status, response_data, created_at, updated_at
-		from attendee_responses
-		where event_uid = $1 and attendee_email = $2
-	`, eventUID, attendeeEmail)
-
-	var response storage.AttendeeResponse
-	err := row.Scan(&response.ID, &response.EventUID, &response.CalendarID,
-		&response.AttendeeEmail, &response.ResponseStatus, &response.ResponseData,
-		&response.CreatedAt, &response.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &response, nil
 }
 
 // ListAttendeeResponses lists all responses for an event
@@ -286,30 +222,3 @@ func (s *Store) DeleteFreeBusyInfo(ctx context.Context, userID, eventUID string)
 	return err
 }
 
-// GetPendingSchedulingObjects gets objects that need processing
-func (s *Store) GetPendingSchedulingObjects(ctx context.Context, limit int) ([]*storage.SchedulingObject, error) {
-	rows, err := s.pool.Query(ctx, `
-		select id::text, calendar_id::text, uid, etag, data, method,
-			   recipient, originator, status, created_at, updated_at
-		from scheduling_objects
-		where status = 'pending'
-		order by created_at
-		limit $1
-	`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*storage.SchedulingObject
-	for rows.Next() {
-		var obj storage.SchedulingObject
-		if err := rows.Scan(&obj.ID, &obj.CalendarID, &obj.UID, &obj.ETag,
-			&obj.Data, &obj.Method, &obj.Recipient, &obj.Originator,
-			&obj.Status, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, &obj)
-	}
-	return out, nil
-}

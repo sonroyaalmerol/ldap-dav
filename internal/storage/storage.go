@@ -135,4 +135,20 @@ type Store interface {
 	GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (token string, seq int64, err error)
 	ListAddressbookChangesSince(ctx context.Context, addressbookID string, sinceSeq int64, limit int) ([]Change, int64, error)
 	RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (newToken string, newSeq int64, err error)
+
+	CreateSchedulingInbox(ctx context.Context, ownerUserID, ownerGroup string) error
+	CreateSchedulingOutbox(ctx context.Context, ownerUserID, ownerGroup string) error
+
+	GetSchedulingInbox(ctx context.Context, ownerUserID string) (*Calendar, error)
+	GetSchedulingOutbox(ctx context.Context, ownerUserID string) (*Calendar, error)
+
+	StoreSchedulingObject(ctx context.Context, obj *SchedulingObject) error
+	ListSchedulingObjects(ctx context.Context, calendarID string) ([]*SchedulingObject, error)
+
+	StoreAttendeeResponse(ctx context.Context, response *AttendeeResponse) error
+	ListAttendeeResponses(ctx context.Context, eventUID string) ([]*AttendeeResponse, error)
+
+	StoreFreeBusyInfo(ctx context.Context, info *FreeBusyInfo) error
+	GetFreeBusyInfo(ctx context.Context, userID string, start, end time.Time) ([]*FreeBusyInfo, error)
+	DeleteFreeBusyInfo(ctx context.Context, userID, eventUID string) error
 }
