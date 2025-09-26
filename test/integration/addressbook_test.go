@@ -33,6 +33,7 @@ func TestCardDAVIntegration(t *testing.T) {
 	cmd := exec.Command("/usr/local/bin/ldap-dav")
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "LDAP_ADDRESSBOOK_FILTER_0_NAME=Test")
+	cmd.Env = append(cmd.Env, "LDAP_ADDRESSBOOK_FILTER_0_URI=test")
 	cmd.Env = append(cmd.Env, "LDAP_ADDRESSBOOK_FILTER_0_FILTER=(objectClass=inetOrgPerson)")
 	//dc=example,dc=com
 	cmd.Stdout = os.Stdout
@@ -330,8 +331,7 @@ func testPersonalAddressbookCRUD(t *testing.T, client *http.Client, baseURL, bas
 }
 
 func testLDAPAddressbookReadOnly(t *testing.T, client *http.Client, baseURL, basePath, authz string) {
-	// Assumes LDAP addressbook is exposed as ldap_0
-	ldapAB := "ldap_0"
+	ldapAB := "ldap_test"
 	abURL := baseURL + basePath + "/addressbooks/alice/" + ldapAB + "/"
 
 	// PROPFIND collection depth 0
