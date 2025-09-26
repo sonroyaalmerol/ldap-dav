@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gosimple/slug"
@@ -29,15 +30,15 @@ type LDAPAddressbookFilter struct {
 	Description        string
 	URI                string
 	Timeout            time.Duration
-	MapUID             string
-	MapDisplayName     string
-	MapFirstName       string
-	MapLastName        string
-	MapEmail           string
-	MapPhone           string
-	MapOrganization    string
-	MapTitle           string
-	MapPhoto           string
+	MapUID             []string
+	MapDisplayName     []string
+	MapFirstName       []string
+	MapLastName        []string
+	MapEmail           []string
+	MapPhone           []string
+	MapOrganization    []string
+	MapTitle           []string
+	MapPhoto           []string
 }
 
 type LDAPConfig struct {
@@ -96,6 +97,25 @@ func getenv(key, def string) string {
 	return def
 }
 
+// parseMapping parses environment variable values that can contain | for OR operations
+func parseMapping(value string) []string {
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, "|")
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+
+	return result
+}
+
 func loadAddressbookFilters() []LDAPAddressbookFilter {
 	var filters []LDAPAddressbookFilter
 
@@ -123,15 +143,15 @@ func loadAddressbookFilters() []LDAPAddressbookFilter {
 			Description:        getenv(prefix+"_DESCRIPTION", ""),
 			URI:                getenv(prefix+"_URI", slug.Make(fmt.Sprintf("Addressbook_%d", i))),
 			Timeout:            5 * time.Second,
-			MapUID:             getenv(prefix+"_MAP_UID", "uid"),
-			MapDisplayName:     getenv(prefix+"_MAP_DISPLAY_NAME", "displayName"),
-			MapFirstName:       getenv(prefix+"_MAP_FIRST_NAME", "givenName"),
-			MapLastName:        getenv(prefix+"_MAP_LAST_NAME", "sn"),
-			MapEmail:           getenv(prefix+"_MAP_EMAIL", "mail"),
-			MapPhone:           getenv(prefix+"_MAP_PHONE", "telephoneNumber"),
-			MapOrganization:    getenv(prefix+"_MAP_ORGANIZATION", "o"),
-			MapTitle:           getenv(prefix+"_MAP_TITLE", "title"),
-			MapPhoto:           getenv(prefix+"_MAP_PHOTO", "jpegPhoto"),
+			MapUID:             parseMapping(getenv(prefix+"_MAP_UID", "uid")),
+			MapDisplayName:     parseMapping(getenv(prefix+"_MAP_DISPLAY_NAME", "displayName|cn")),
+			MapFirstName:       parseMapping(getenv(prefix+"_MAP_FIRST_NAME", "givenName")),
+			MapLastName:        parseMapping(getenv(prefix+"_MAP_LAST_NAME", "sn")),
+			MapEmail:           parseMapping(getenv(prefix+"_MAP_EMAIL", "mail|email")),
+			MapPhone:           parseMapping(getenv(prefix+"_MAP_PHONE", "telephoneNumber|mobile")),
+			MapOrganization:    parseMapping(getenv(prefix+"_MAP_ORGANIZATION", "o|organizationName")),
+			MapTitle:           parseMapping(getenv(prefix+"_MAP_TITLE", "title|jobTitle")),
+			MapPhoto:           parseMapping(getenv(prefix+"_MAP_PHOTO", "jpegPhoto")),
 		}
 
 		// If NAME or BASE_DN is explicitly set, or if the base var exists, include this filter

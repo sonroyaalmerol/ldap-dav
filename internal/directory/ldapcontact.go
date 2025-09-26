@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/rs/zerolog"
@@ -103,20 +102,22 @@ func (c *LDAPContactClient) attrsForFilter() []string {
 	set := map[string]struct{}{
 		"dn": {},
 	}
-	add := func(s string) {
-		if s != "" {
-			set[s] = struct{}{}
+	addSlice := func(attrs []string) {
+		for _, attr := range attrs {
+			if attr != "" {
+				set[attr] = struct{}{}
+			}
 		}
 	}
-	add(c.cfg.MapUID)
-	add(c.cfg.MapDisplayName)
-	add(c.cfg.MapFirstName)
-	add(c.cfg.MapLastName)
-	add(c.cfg.MapEmail)
-	add(c.cfg.MapPhone)
-	add(c.cfg.MapOrganization)
-	add(c.cfg.MapTitle)
-	add(c.cfg.MapPhoto)
+	addSlice(c.cfg.MapUID)
+	addSlice(c.cfg.MapDisplayName)
+	addSlice(c.cfg.MapFirstName)
+	addSlice(c.cfg.MapLastName)
+	addSlice(c.cfg.MapEmail)
+	addSlice(c.cfg.MapPhone)
+	addSlice(c.cfg.MapOrganization)
+	addSlice(c.cfg.MapTitle)
+	addSlice(c.cfg.MapPhoto)
 
 	out := make([]string, 0, len(set))
 	for k := range set {
@@ -125,91 +126,75 @@ func (c *LDAPContactClient) attrsForFilter() []string {
 	return out
 }
 
-func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error) {
-	if v, ok := c.cache.Get("all"); ok {
-		return v, nil
-	}
-	search := ldap.NewSearchRequest(
-		c.cfg.BaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(c.cfg.Timeout.Seconds()), false,
-		c.cfg.Filter,
-		c.attrsForFilter(),
-		nil,
-	)
-	res, err := c.conn.Search(search)
-	if err != nil {
-		c.logger.Error().Err(err).
-			Str("url", c.cfg.URL).
-			Str("base_dn", c.cfg.BaseDN).
-			Str("filter", c.cfg.Filter).
-			Msg("LDAP search failed in ListContacts")
-		return nil, err
-	}
-
-	out := make([]Contact, 0, len(res.Entries))
-	for _, e := range res.Entries {
-		out = append(out, c.mapEntry(e))
-	}
-	c.cache.Set("all", out, time.Now().Add(30*time.Second))
-	return out, nil
-}
-
 func (c *LDAPContactClient) GetContact(ctx context.Context, uid string) (*Contact, error) {
-	search := ldap.NewSearchRequest(
-		c.cfg.BaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
-		fmt.Sprintf("(%s=%s)", c.cfg.MapUID, uid),
-		c.attrsForFilter(),
-		nil,
-	)
-	res, err := c.conn.Search(search)
-	if err != nil {
-		c.logger.Error().Err(err).
-			Str("url", c.cfg.URL).
-			Str("attr", c.cfg.MapUID).
-			Str("value", uid).
-			Str("base_dn", c.cfg.BaseDN).
-			Str("filter", c.cfg.Filter).
-			Msg("LDAP search failed in GetContact")
-		return nil, err
+	// Try each UID mapping until we find a match
+	for _, uidAttr := range c.cfg.MapUID {
+		if uidAttr == "" {
+			continue
+		}
+
+		search := ldap.NewSearchRequest(
+			c.cfg.BaseDN,
+			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
+			fmt.Sprintf("(%s=%s)", uidAttr, uid),
+			c.attrsForFilter(),
+			nil,
+		)
+		res, err := c.conn.Search(search)
+		if err != nil {
+			c.logger.Error().Err(err).
+				Str("url", c.cfg.URL).
+				Str("attr", uidAttr).
+				Str("value", uid).
+				Str("base_dn", c.cfg.BaseDN).
+				Str("filter", c.cfg.Filter).
+				Msg("LDAP search failed in GetContact")
+			continue // Try next mapping
+		}
+
+		if len(res.Entries) == 1 {
+			out := c.mapEntry(res.Entries[0])
+			return &out, nil
+		}
 	}
 
-	if len(res.Entries) != 1 {
-		c.logger.Error().Err(err).
-			Str("url", c.cfg.URL).
-			Str("attr", c.cfg.MapUID).
-			Str("value", uid).
-			Str("base_dn", c.cfg.BaseDN).
-			Str("filter", c.cfg.Filter).
-			Int("num_entries", len(res.Entries)).
-			Msg("LDAP search failed in GetContact")
-		return nil, ldap.NewError(ldap.ErrorFilterCompile, errors.New("not found"))
-	}
-
-	out := c.mapEntry(res.Entries[0])
-	return &out, nil
+	return nil, ldap.NewError(ldap.ErrorFilterCompile, errors.New("not found"))
 }
 
 func (c *LDAPContactClient) mapEntry(e *ldap.Entry) Contact {
-	get := func(attr string) string {
-		if attr == "" {
-			return ""
-		}
-		return e.GetAttributeValue(attr)
-	}
-	gets := func(attr string) []string {
-		if attr == "" {
-			return nil
-		}
-		vals := e.GetAttributeValues(attr)
-		// Filter empty
-		out := make([]string, 0, len(vals))
-		for _, v := range vals {
-			if strings.TrimSpace(v) != "" {
-				out = append(out, v)
+	// Updated get function to try multiple attributes in order
+	get := func(attrs []string) string {
+		for _, attr := range attrs {
+			if attr == "" {
+				continue
+			}
+			if val := e.GetAttributeValue(attr); val != "" {
+				return val
 			}
 		}
-		return out
+		return ""
+	}
+
+	// Updated gets function to try multiple attributes in order
+	gets := func(attrs []string) []string {
+		var allVals []string
+		for _, attr := range attrs {
+			if attr == "" {
+				continue
+			}
+			vals := e.GetAttributeValues(attr)
+			for _, v := range vals {
+				if strings.TrimSpace(v) != "" {
+					allVals = append(allVals, v)
+				}
+			}
+			// If we found values for this attribute, return them
+			// This implements the OR behavior - first non-empty wins
+			if len(allVals) > 0 {
+				return allVals
+			}
+		}
+		return allVals
 	}
 
 	contact := Contact{
