@@ -44,14 +44,22 @@ func New(dsn string, logger zerolog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
 	}
 
-	if err := runMigrations(db, logger); err != nil {
+	store := &Store{db: db, logger: logger}
+
+	if err := runMigrations(dsn, logger); err != nil {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	return &Store{db: db, logger: logger}, nil
+	return store, nil
 }
 
-func runMigrations(db *sql.DB, logger zerolog.Logger) error {
+func runMigrations(dsn string, logger zerolog.Logger) error {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open database for migrations: %w", err)
+	}
+	defer db.Close()
+
 	sourceDriver, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create source driver: %w", err)
