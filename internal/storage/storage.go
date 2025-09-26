@@ -57,6 +57,42 @@ type Addressbook struct {
 	UpdatedAt   time.Time
 }
 
+type SchedulingObject struct {
+	ID         string
+	CalendarID string
+	UID        string
+	ETag       string
+	Data       string
+	Method     string // REQUEST, REPLY, CANCEL, etc.
+	Recipient  string
+	Originator string
+	Status     string // pending, delivered, failed
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AttendeeResponse struct {
+	ID             string
+	EventUID       string
+	CalendarID     string
+	AttendeeEmail  string
+	ResponseStatus string // ACCEPTED, DECLINED, TENTATIVE
+	ResponseData   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type FreeBusyInfo struct {
+	ID        string
+	UserID    string
+	StartTime time.Time
+	EndTime   time.Time
+	BusyType  string // BUSY, BUSY-UNAVAILABLE, BUSY-TENTATIVE
+	EventUID  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type Store interface {
 	Close()
 	// Calendars
