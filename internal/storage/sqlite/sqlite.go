@@ -10,8 +10,8 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	_ "github.com/ncruces/go-sqlite3/driver"
 	"github.com/rs/zerolog"
-	_ "modernc.org/sqlite"
 )
 
 type Store struct {
@@ -20,7 +20,7 @@ type Store struct {
 }
 
 func New(dsn string, logger zerolog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -54,6 +54,9 @@ func configureSQLite(db *sql.DB) error {
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA synchronous = NORMAL",
+		"PRAGMA busy_timeout = 30000",
+		"PRAGMA cache_size = 10000",
+		"PRAGMA temp_store = memory",
 	}
 
 	for _, pragma := range pragmas {
@@ -86,7 +89,7 @@ func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 }
 
 func runMigrations(dsn string, logger zerolog.Logger) error {
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database for migrations: %w", err)
 	}

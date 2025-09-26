@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/ncruces/go-sqlite3/driver"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
-	_ "modernc.org/sqlite"
 )
 
 func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, description string) error {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 
+	_ "github.com/ncruces/go-sqlite3/driver"
+
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
