@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/rs/zerolog"
@@ -96,6 +97,35 @@ func (c *LDAPContactClient) ListAddressbooks(ctx context.Context) ([]Addressbook
 		Enabled:     true,
 		URI:         "ldap_" + c.cfg.URI,
 	}}, nil
+}
+
+func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error) {
+	if v, ok := c.cache.Get("all"); ok {
+		return v, nil
+	}
+	search := ldap.NewSearchRequest(
+		c.cfg.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(c.cfg.Timeout.Seconds()), false,
+		c.cfg.Filter,
+		c.attrsForFilter(),
+		nil,
+	)
+	res, err := c.conn.Search(search)
+	if err != nil {
+		c.logger.Error().Err(err).
+			Str("url", c.cfg.URL).
+			Str("base_dn", c.cfg.BaseDN).
+			Str("filter", c.cfg.Filter).
+			Msg("LDAP search failed in ListContacts")
+		return nil, err
+	}
+
+	out := make([]Contact, 0, len(res.Entries))
+	for _, e := range res.Entries {
+		out = append(out, c.mapEntry(e))
+	}
+	c.cache.Set("all", out, time.Now().Add(30*time.Second))
+	return out, nil
 }
 
 func (c *LDAPContactClient) attrsForFilter() []string {
