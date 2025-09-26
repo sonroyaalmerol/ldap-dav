@@ -3,10 +3,8 @@ package directory
 import (
 	"context"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"net"
 	"strings"
 	"time"
@@ -98,17 +96,16 @@ func (c *LDAPContactClient) ListAddressbooks(ctx context.Context) ([]Addressbook
 	}}, nil
 }
 
-func (c *LDAPContactClient) attrsForFilter(propFilter []string) []string {
-	// Always include DN and mapping attrs we might need
+func (c *LDAPContactClient) attrsForFilter() []string {
 	set := map[string]struct{}{
 		"dn": {},
 	}
-	// Include configured mapping attributes
 	add := func(s string) {
 		if s != "" {
 			set[s] = struct{}{}
 		}
 	}
+	add(c.cfg.MapUID)
 	add(c.cfg.MapDisplayName)
 	add(c.cfg.MapFirstName)
 	add(c.cfg.MapLastName)
@@ -118,7 +115,6 @@ func (c *LDAPContactClient) attrsForFilter(propFilter []string) []string {
 	add(c.cfg.MapTitle)
 	add(c.cfg.MapPhoto)
 
-	// propFilter is CardDAV property names; for simplicity we fetch all mapped attrs
 	out := make([]string, 0, len(set))
 	for k := range set {
 		out = append(out, k)
@@ -126,7 +122,7 @@ func (c *LDAPContactClient) attrsForFilter(propFilter []string) []string {
 	return out
 }
 
-func (c *LDAPContactClient) ListContacts(ctx context.Context, propFilter []string) ([]Contact, error) {
+func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error) {
 	if v, ok := c.cache.Get("all"); ok {
 		return v, nil
 	}
@@ -134,7 +130,7 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context, propFilter []strin
 		c.cfg.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 15, false,
 		c.cfg.Filter,
-		c.attrsForFilter(propFilter),
+		c.attrsForFilter(),
 		nil,
 	)
 	res, err := c.conn.Search(search)
@@ -150,23 +146,27 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context, propFilter []strin
 }
 
 func (c *LDAPContactClient) GetContact(ctx context.Context, uid string) (*Contact, error) {
-	all, err := c.ListContacts(ctx, nil)
+	search := ldap.NewSearchRequest(
+		c.cfg.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 15, false,
+		fmt.Sprintf("(%s=%s)", c.cfg.MapUID, uid),
+		c.attrsForFilter(),
+		nil,
+	)
+	res, err := c.conn.Search(search)
 	if err != nil {
 		return nil, err
 	}
-	for _, ct := range all {
-		if ct.ID == uid {
-			return &ct, nil
-		}
+
+	if len(res.Entries) != 1 {
+		return nil, ldap.NewError(ldap.ErrorFilterCompile, errors.New("not found"))
 	}
-	return nil, ldap.NewError(ldap.ErrorFilterCompile, errors.New("not found"))
+
+	out := c.mapEntry(res.Entries[0])
+	return &out, nil
 }
 
 func (c *LDAPContactClient) mapEntry(e *ldap.Entry) Contact {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(e.DN))
-	id := hex.EncodeToString(h.Sum(nil))
-
 	get := func(attr string) string {
 		if attr == "" {
 			return ""
@@ -189,7 +189,7 @@ func (c *LDAPContactClient) mapEntry(e *ldap.Entry) Contact {
 	}
 
 	contact := Contact{
-		ID:           id,
+		ID:           get(c.cfg.MapUID),
 		DN:           e.DN,
 		DisplayName:  get(c.cfg.MapDisplayName),
 		FirstName:    get(c.cfg.MapFirstName),

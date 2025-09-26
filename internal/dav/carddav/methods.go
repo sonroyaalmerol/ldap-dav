@@ -54,11 +54,19 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(addressbookID, "ldap_") {
 		dir := h.addressbookDirs[abURI]
 		if dir == nil {
+			h.logger.Error().Err(err).
+				Str("owner", owner).
+				Str("addressbook", abURI).
+				Msg("failed to resolve addressbook ldap in GET")
 			http.NotFound(w, r)
 			return
 		}
 		contact, err := dir.GetContact(r.Context(), uid)
 		if err != nil {
+			h.logger.Error().Err(err).
+				Str("owner", owner).
+				Str("addressbook", abURI).
+				Msg("failed to resolve addressbook in GET")
 			http.NotFound(w, r)
 			return
 		}

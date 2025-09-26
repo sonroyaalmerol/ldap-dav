@@ -147,6 +147,7 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 
 	if strings.HasPrefix(collection, "ldap_") {
 		if _, ok := c.handlers.addressbookDirs[collection]; !ok {
+			c.handlers.logger.Debug().Str("user", u.UID).Str("owner", owner).Msg("PROPFIND collection forbidden - user mismatch")
 			http.NotFound(w, r)
 			return
 		}
@@ -263,12 +264,14 @@ func (c *CardDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.R
 	if strings.HasPrefix(collection, "ldap_") {
 		dir := c.handlers.addressbookDirs[collection]
 		if dir == nil {
+			c.handlers.logger.Debug().Str("user", u.UID).Str("owner", owner).Msg("PROPFIND object forbidden - user mismatch")
 			http.NotFound(w, r)
 			return
 		}
 		uid := strings.TrimSuffix(object, filepath.Ext(object))
 		_, err := dir.GetContact(r.Context(), uid)
 		if err != nil {
+			c.handlers.logger.Error().Err(err).Str("user", u.UID).Str("owner", owner).Msg("PROPFIND object forbidden - user mismatch")
 			http.NotFound(w, r)
 			return
 		}

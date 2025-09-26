@@ -4,7 +4,7 @@ import "context"
 
 type ContactDirectory interface {
 	ListAddressbooks(ctx context.Context) ([]Addressbook, error)
-	ListContacts(ctx context.Context, propFilter []string) ([]Contact, error)
+	ListContacts(ctx context.Context) ([]Contact, error)
 	GetContact(ctx context.Context, uid string) (*Contact, error)
 }
 

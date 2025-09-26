@@ -28,6 +28,7 @@ type LDAPAddressbookFilter struct {
 	Enabled            bool
 	Description        string
 	URI                string
+	MapUID             string
 	MapDisplayName     string
 	MapFirstName       string
 	MapLastName        string
@@ -120,6 +121,7 @@ func loadAddressbookFilters() []LDAPAddressbookFilter {
 			Enabled:            getenv(prefix+"_ENABLED", "true") == "true",
 			Description:        getenv(prefix+"_DESCRIPTION", ""),
 			URI:                getenv(prefix+"_URI", slug.Make(fmt.Sprintf("Addressbook_%d", i))),
+			MapUID:             getenv(prefix+"_MAP_UID", "uid"),
 			MapDisplayName:     getenv(prefix+"_MAP_DISPLAY_NAME", "displayName"),
 			MapFirstName:       getenv(prefix+"_MAP_FIRST_NAME", "givenName"),
 			MapLastName:        getenv(prefix+"_MAP_LAST_NAME", "sn"),

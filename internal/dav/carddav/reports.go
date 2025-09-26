@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
+	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
@@ -35,11 +36,17 @@ func (h *Handlers) ReportAddressbookQuery(w http.ResponseWriter, r *http.Request
 	if strings.HasPrefix(addressbookID, "ldap_") {
 		dir := h.addressbookDirs[abURI]
 		if dir == nil {
+			h.logger.Error().Err(err).
+				Str("addressbookID", addressbookID).
+				Msg("failed to list ldap contacts in addressbook-query")
 			http.NotFound(w, r)
 			return
 		}
-		contacts, err := dir.ListContacts(r.Context(), filterProps)
+		contacts, err := dir.ListContacts(r.Context())
 		if err != nil {
+			h.logger.Error().Err(err).
+				Str("addressbookID", addressbookID).
+				Msg("failed to list ldap contacts in addressbook-query")
 			http.Error(w, "ldap error", http.StatusInternalServerError)
 			return
 		}
@@ -49,7 +56,9 @@ func (h *Handlers) ReportAddressbookQuery(w http.ResponseWriter, r *http.Request
 			resps = append(resps, buildReportResponseLDAP(hrefStr, props, &ct))
 		}
 		ms := common.MultiStatus{Responses: resps}
-		_ = common.ServeMultiStatus(w, &ms)
+		if err := common.ServeMultiStatus(w, &ms); err != nil {
+			h.logger.Error().Err(err).Msg("failed to serve MultiStatus for addressbook-query")
+		}
 		return
 	}
 
@@ -100,7 +109,7 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 				h.logger.Debug().Err(err).
 					Str("addressbookID", addressbookID).
 					Str("uid", uid).
-					Msg("failed to get contact in multiget")
+					Msg("failed to get contact in ldap multiget")
 				return
 			}
 			contact, err := dir.GetContact(r.Context(), uid)
@@ -108,7 +117,7 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 				h.logger.Debug().Err(err).
 					Str("addressbookID", addressbookID).
 					Str("uid", uid).
-					Msg("failed to get contact in multiget")
+					Msg("failed to get contact in ldap multiget")
 				continue
 			}
 			resps = append(resps, buildReportResponseLDAP(hrefStr, props, contact))
@@ -158,6 +167,25 @@ func buildReportResponse(hrefStr string, props common.PropRequest, contact *stor
 	}
 	if !contact.UpdatedAt.IsZero() {
 		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(contact.UpdatedAt)})
+	}
+	return resp
+}
+
+func buildReportResponseLDAP(hrefStr string, props common.PropRequest, contact *directory.Contact) common.Response {
+	vcardStr := contact.VCardData
+	etag := computeStableETag(contact)
+
+	resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/vcard; charset=utf-8"})
+	if props.AddressData {
+		type AddressData struct {
+			XMLName xml.Name `xml:"urn:ietf:params:xml:ns:carddav address-data"`
+			Text    string   `xml:",chardata"`
+		}
+		_ = resp.EncodeProp(http.StatusOK, AddressData{Text: vcardStr})
+	}
+	if props.GetETag && etag != "" {
+		_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(etag)})
 	}
 	return resp
 }
