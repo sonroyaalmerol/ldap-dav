@@ -14,50 +14,50 @@ import (
 )
 
 func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, description string) error {
-	ctx := context.Background()
+	return s.withTx(context.Background(), func(tx *sql.Tx) error {
+		id := c.ID
+		if id == "" {
+			id = uuid.New().String()
+		}
+		ownerUser := c.OwnerUserID
+		if ownerUser == "" {
+			return fmt.Errorf("OwnerUserID required")
+		}
+		uri := c.URI
+		if uri == "" {
+			return fmt.Errorf("URI required")
+		}
+		displayName := c.DisplayName
+		color := c.Color
+		if color == "" {
+			color = "#3174ad"
+		}
+		ctag := c.CTag
+		if ctag == "" {
+			ctag = uuid.New().String()
+		}
+		now := time.Now().UTC()
 
-	id := c.ID
-	if id == "" {
-		id = uuid.New().String()
-	}
-	ownerUser := c.OwnerUserID
-	if ownerUser == "" {
-		return fmt.Errorf("OwnerUserID required")
-	}
-	uri := c.URI
-	if uri == "" {
-		return fmt.Errorf("URI required")
-	}
-	displayName := c.DisplayName
-	color := c.Color
-	if color == "" {
-		color = "#3174ad" // Default blue color
-	}
-	ctag := c.CTag
-	if ctag == "" {
-		ctag = uuid.New().String()
-	}
-	now := time.Now().UTC()
+		grp := ownerGroup
+		if grp == "" {
+			grp = c.OwnerGroup
+		}
+		desc := description
+		if desc == "" {
+			desc = c.Description
+		}
 
-	grp := ownerGroup
-	if grp == "" {
-		grp = c.OwnerGroup
-	}
-	desc := description
-	if desc == "" {
-		desc = c.Description
-	}
-
-	_, err := s.db.ExecContext(ctx, `
-        INSERT INTO calendars (
-          id, owner_user_id, owner_group, uri, display_name, description, color,
-          ctag, created_at, updated_at, sync_seq, sync_token
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, 0, 'seq:0'
-        )
-    `, id, ownerUser, grp, uri, displayName, desc, color, ctag, now, now)
-	return err
+		_, err := tx.Exec(`
+			INSERT INTO calendars (
+				id, owner_user_id, owner_group, uri, display_name, description, color,
+				ctag, created_at, updated_at, sync_seq, sync_token
+			) VALUES (
+				?, ?, ?, ?, ?, ?, ?,
+				?, ?, ?, 0, 'seq:0'
+			)
+		`, id, ownerUser, grp, uri, displayName, desc, color, ctag, now, now)
+		return err
+	})
 }
 
 func (s *Store) DeleteCalendar(ownerUserID, calURI string) error {
@@ -158,27 +158,29 @@ func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage
 }
 
 func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
-	if obj.ID == "" {
-		obj.ID = randID()
-	}
-	if obj.ETag == "" {
-		obj.ETag = randID()
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO calendar_objects (
-			id, calendar_id, uid, etag, data, component, start_at, end_at
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?
-		)
-		ON CONFLICT(calendar_id, uid) DO UPDATE SET
-			etag = excluded.etag,
-			data = excluded.data,
-			component = excluded.component,
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			updated_at = datetime('now')
-	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-	return err
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if obj.ID == "" {
+			obj.ID = randID()
+		}
+		if obj.ETag == "" {
+			obj.ETag = randID()
+		}
+		_, err := tx.Exec(`
+			INSERT INTO calendar_objects (
+				id, calendar_id, uid, etag, data, component, start_at, end_at
+			) VALUES (
+				?, ?, ?, ?, ?, ?, ?, ?
+			)
+			ON CONFLICT(calendar_id, uid) DO UPDATE SET
+				etag = excluded.etag,
+				data = excluded.data,
+				component = excluded.component,
+				start_at = excluded.start_at,
+				end_at = excluded.end_at,
+				updated_at = datetime('now')
+		`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
+		return err
+	})
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
@@ -230,8 +232,12 @@ func (s *Store) ListObjects(ctx context.Context, calendarID string, start *time.
 }
 
 func (s *Store) NewCTag(ctx context.Context, calendarID string) (string, error) {
-	ctag := randID()
-	_, err := s.db.ExecContext(ctx, `UPDATE calendars SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, calendarID)
+	var ctag string
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		ctag = randID()
+		_, err := tx.Exec(`UPDATE calendars SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, calendarID)
+		return err
+	})
 	return ctag, err
 }
 
@@ -330,37 +336,29 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 }
 
 func (s *Store) RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (string, int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// increment seq and get new values
-	var newSeq int64
 	var newToken string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE calendars
-		SET sync_seq = sync_seq + 1,
-		    sync_token = 'seq:' || (sync_seq + 1)
-		WHERE id = ?
-		RETURNING sync_seq, sync_token
-	`, calendarID).Scan(&newSeq, &newToken)
-	if err != nil {
-		return "", 0, err
-	}
+	var newSeq int64
 
-	// insert change row
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO calendar_changes(calendar_id, seq, uid, deleted)
-		VALUES (?, ?, ?, ?)
-	`, calendarID, newSeq, uid, deleted)
-	if err != nil {
-		return "", 0, err
-	}
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		// increment seq and get new values
+		err := tx.QueryRow(`
+			UPDATE calendars
+			SET sync_seq = sync_seq + 1,
+				sync_token = 'seq:' || (sync_seq + 1)
+			WHERE id = ?
+			RETURNING sync_seq, sync_token
+		`, calendarID).Scan(&newSeq, &newToken)
+		if err != nil {
+			return err
+		}
 
-	if err := tx.Commit(); err != nil {
-		return "", 0, err
-	}
-	return newToken, newSeq, nil
+		// insert change row
+		_, err = tx.Exec(`
+			INSERT INTO calendar_changes(calendar_id, seq, uid, deleted)
+			VALUES (?, ?, ?, ?)
+		`, calendarID, newSeq, uid, deleted)
+		return err
+	})
+
+	return newToken, newSeq, err
 }
