@@ -93,42 +93,34 @@ func (c *CardDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Req
 			resps = append(resps, resp)
 		}
 
-		// Add global LDAP addressbooks (read-only)
-		u, _ := common.CurrentUser(r.Context())
-		if u != nil {
-			ldapAddressbooks, err := c.handlers.dir.ListAddressbooks(r.Context())
+		// LDAP addressbooks
+		for uri, dir := range c.handlers.addressbookDirs {
+			abs, err := dir.ListAddressbooks(r.Context())
 			if err != nil {
-				c.handlers.logger.Error().Err(err).Str("user", u.UID).Msg("failed to list LDAP addressbooks")
-			} else {
-				for _, ldapAB := range ldapAddressbooks {
-					if !ldapAB.Enabled {
-						continue
-					}
+				c.handlers.logger.Error().Err(err).Str("ldap_ab", uri).Msg("failed to list LDAP addressbooks")
+				continue
+			}
+			for _, ab := range abs {
+				hrefStr := common.AddressbookPath(c.basePath, owner, ab.URI)
+				resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+				_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Addressbook: &struct{}{}})
+				_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: ab.Name})
+				_ = resp.EncodeProp(http.StatusOK, common.Owner{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
+				_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
+				_ = resp.EncodeProp(http.StatusOK, supportedReportSetValue())
 
-					hrefStr := common.AddressbookPath(c.basePath, owner, ldapAB.ID)
-					resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
-					_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Addressbook: &struct{}{}})
-					_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: ldapAB.Name})
-					_ = resp.EncodeProp(http.StatusOK, common.Owner{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
-					_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
-					_ = resp.EncodeProp(http.StatusOK, supportedReportSetValue())
+				// Read-only: privileges limited to read
+				_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+					Privilege: []common.Privilege{{Read: &struct{}{}}},
+				})
+				_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
+				// Fixed sync token for read-only LDAP (no change tracking)
+				_ = resp.EncodeProp(http.StatusOK, struct {
+					XMLName xml.Name `xml:"DAV: sync-token"`
+					Text    string   `xml:",chardata"`
+				}{Text: "seq:0"})
 
-					_ = resp.EncodeProp(http.StatusOK, struct {
-						XMLName xml.Name `xml:"DAV: sync-token"`
-						Text    string   `xml:",chardata"`
-					}{Text: "ldap-readonly"})
-					_ = resp.EncodeProp(http.StatusOK, struct {
-						XMLName xml.Name `xml:"http://calendarserver.org/ns/ getctag"`
-						Text    string   `xml:",chardata"`
-					}{Text: "ldap-readonly"})
-
-					_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-						Privilege: []common.Privilege{{Read: &struct{}{}}},
-					})
-
-					_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
-					resps = append(resps, resp)
-				}
+				resps = append(resps, resp)
 			}
 		}
 	}
@@ -153,7 +145,38 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// First, check user's own addressbooks
+	if strings.HasPrefix(collection, "ldap_") {
+		if _, ok := c.handlers.addressbookDirs[collection]; !ok {
+			http.NotFound(w, r)
+			return
+		}
+		href := common.AddressbookPath(c.basePath, owner, collection)
+		ownerHref := common.PrincipalURL(c.basePath, owner)
+
+		resp := common.Response{Hrefs: []common.Href{{Value: href}}}
+		_ = resp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}, Addressbook: &struct{}{}})
+		_ = resp.EncodeProp(http.StatusOK, common.DisplayName{Name: collection})
+		_ = resp.EncodeProp(http.StatusOK, common.Owner{Href: &common.Href{Value: ownerHref}})
+		_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: ownerHref}})
+		_ = resp.EncodeProp(http.StatusOK, supportedReportSetValue())
+		_ = resp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
+		_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: []common.Privilege{{Read: &struct{}{}}}})
+		_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
+		_ = resp.EncodeProp(http.StatusOK, common.SupportedAddressData{
+			AddressDataType: []common.AddressDataType{
+				{ContentType: "text/vcard", Version: "3.0"},
+				{ContentType: "text/vcard", Version: "4.0"},
+			},
+		})
+		_ = resp.EncodeProp(http.StatusOK, struct {
+			XMLName xml.Name `xml:"DAV: sync-token"`
+			Text    string   `xml:",chardata"`
+		}{Text: "seq:0"})
+		ms := common.MultiStatus{Responses: []common.Response{resp}}
+		_ = common.ServeMultiStatus(w, &ms)
+		return
+	}
+
 	addressbooks, err := c.handlers.store.ListAddressbooksByOwnerUser(r.Context(), owner)
 	if err != nil {
 		c.handlers.logger.Error().Err(err).Str("owner", owner).Msg("failed to list addressbooks by owner in PROPFIND collection")
@@ -166,27 +189,6 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 		if addressbook.URI == collection {
 			ab = addressbook
 			break
-		}
-	}
-
-	// If not found in user's addressbooks, check LDAP addressbooks
-	if ab == nil {
-		ldapAddressbooks, err := c.handlers.dir.ListAddressbooks(r.Context())
-		if err != nil {
-			c.handlers.logger.Error().Err(err).Str("user", u.UID).Msg("failed to list LDAP addressbooks")
-		} else {
-			for _, ldapAB := range ldapAddressbooks {
-				if ldapAB.Enabled && ldapAB.ID == collection {
-					// Create a virtual addressbook for the LDAP source
-					ab = &storage.Addressbook{
-						URI:         ldapAB.ID,
-						DisplayName: ldapAB.Name,
-						OwnerUserID: owner, // Set as owned by current user for permissions
-						CTag:        "ldap-readonly",
-					}
-					break
-				}
-			}
 		}
 	}
 
@@ -226,17 +228,9 @@ func (c *CardDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *ht
 
 	_ = propResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 
-	// For LDAP addressbooks, set read-only permissions
-	if ab.CTag == "ldap-readonly" {
-		_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-			Privilege: []common.Privilege{{Read: &struct{}{}}},
-		})
-	} else {
-		// For user's own addressbooks, set full permissions
-		_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-			Privilege: []common.Privilege{{All: &struct{}{}}},
-		})
-	}
+	_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+		Privilege: []common.Privilege{{All: &struct{}{}}},
+	})
 
 	_ = propResp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
 
@@ -263,6 +257,26 @@ func (c *CardDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.R
 	if u == nil {
 		c.handlers.logger.Error().Str("path", r.URL.Path).Msg("PROPFIND object unauthorized")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if strings.HasPrefix(collection, "ldap_") {
+		dir := c.handlers.addressbookDirs[collection]
+		if dir == nil {
+			http.NotFound(w, r)
+			return
+		}
+		uid := strings.TrimSuffix(object, filepath.Ext(object))
+		_, err := dir.GetContact(r.Context(), uid)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		hrefStr := common.JoinURL(c.handlers.basePath, "addressbooks", owner, collection, uid+".vcf")
+		resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
+		_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/vcard; charset=utf-8"})
+		ms := common.MultiStatus{Responses: []common.Response{resp}}
+		_ = common.ServeMultiStatus(w, &ms)
 		return
 	}
 

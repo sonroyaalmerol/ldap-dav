@@ -16,22 +16,40 @@ import (
 )
 
 type Handlers struct {
-	cfg      *config.Config
-	store    storage.Store
-	aclProv  acl.Provider
-	logger   zerolog.Logger
-	basePath string
-	dir      directory.Directory
+	cfg             *config.Config
+	store           storage.Store
+	aclProv         acl.Provider
+	logger          zerolog.Logger
+	basePath        string
+	dir             directory.Directory
+	addressbookDirs map[string]directory.ContactDirectory
 }
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, logger zerolog.Logger) *Handlers {
+	addressbookDirs := make(map[string]directory.ContactDirectory)
+	for _, f := range cfg.LDAP.AddressbookFilters {
+		if !f.Enabled {
+			continue
+		}
+		client, err := directory.NewLDAPContactClient(f, cfg.LDAP)
+		if err != nil {
+			logger.Error().Err(err).
+				Str("url", f.URL).
+				Str("binddn", f.BindDN).
+				Msg("Failed to init LDAP contact client for addressbook")
+			continue
+		}
+		addressbookDirs["ldap_"+f.URI] = client
+	}
+
 	return &Handlers{
-		cfg:      cfg,
-		store:    store,
-		dir:      dir,
-		aclProv:  acl.NewLDAPACL(dir),
-		logger:   logger,
-		basePath: cfg.HTTP.BasePath,
+		cfg:             cfg,
+		store:           store,
+		dir:             dir,
+		aclProv:         acl.NewLDAPACL(dir),
+		logger:          logger,
+		basePath:        cfg.HTTP.BasePath,
+		addressbookDirs: addressbookDirs,
 	}
 }
 
@@ -42,18 +60,18 @@ func (h *Handlers) ensurePersonalAddressbook(ctx context.Context, ownerUID strin
 		OwnerUserID: ownerUID,
 		OwnerGroup:  "",
 		URI:         abURI,
-		DisplayName: "Personal Addressbook",
-		Description: "Personal Addressbook",
+		DisplayName: "Personal Address Book",
+		Description: "Personal Address Book",
 		CTag:        "",
 	}
 
 	if existingAB, err := h.store.GetAddressbookByURI(ctx, abURI); err != nil || existingAB == nil {
-		if err := h.store.CreateAddressbook(ab, "", "Personal Addressbook"); err != nil {
+		if err := h.store.CreateAddressbook(ab, "", "Personal Address Book"); err != nil {
 			h.logger.Error().Err(err).
 				Str("user", ownerUID).
 				Str("addressbook", abURI).
 				Str("owner", ownerUID).
-				Msg("Failed to create Personal Addressbook")
+				Msg("Failed to create Personal Address Book")
 		}
 	}
 }
@@ -109,7 +127,10 @@ func (h *Handlers) loadAddressbookByOwnerURI(ctx context.Context, ownerUID, abUR
 
 func (h *Handlers) resolveAddressbook(ctx context.Context, owner, abURI string) (string, string, error) {
 	if strings.HasPrefix(abURI, "ldap_") {
-		return abURI, owner, nil // LDAP addressbooks are "owned" by the requesting user for permissions
+		if _, ok := h.addressbookDirs[abURI]; ok {
+			return abURI, owner, nil
+		}
+		return "", "", errors.New("addressbook not found")
 	}
 
 	if abURI != "" && abURI != "shared" {

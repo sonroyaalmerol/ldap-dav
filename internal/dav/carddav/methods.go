@@ -51,23 +51,31 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pr := common.MustPrincipal(r.Context())
-
 	if strings.HasPrefix(addressbookID, "ldap_") {
-		contact, err := h.dir.GetContact(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, addressbookID, uid)
+		dir := h.addressbookDirs[abURI]
+		if dir == nil {
+			http.NotFound(w, r)
+			return
+		}
+		contact, err := dir.GetContact(r.Context(), uid)
 		if err != nil {
-			h.logger.Error().Err(err).
-				Str("addressbookID", addressbookID).
-				Str("uid", uid).
-				Msg("failed to get LDAP contact in GET")
 			http.NotFound(w, r)
 			return
 		}
 
+		etag := computeStableETag(contact)
+		inm := common.TrimQuotes(r.Header.Get("If-None-Match"))
+		if inm != "" && inm == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", "text/vcard; charset=utf-8")
+		w.Header().Set("ETag", `"`+etag+`"`)
 		_, _ = io.WriteString(w, contact.VCardData)
 		return
 	}
+
+	pr := common.MustPrincipal(r.Context())
 
 	if pr.UserID != abOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, abURI)
@@ -148,9 +156,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(addressbookID, "ldap_") {
-		h.logger.Debug().
-			Str("addressbook", abURI).
-			Msg("PUT request denied - LDAP addressbooks are read-only")
+		h.logger.Debug().Str("addressbook", abURI).Msg("PUT denied - LDAP addressbooks are read-only")
 		http.Error(w, "method not allowed - LDAP addressbooks are read-only", http.StatusMethodNotAllowed)
 		return
 	}
@@ -395,6 +401,12 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleMkcol(w http.ResponseWriter, r *http.Request) {
 	pr := common.MustPrincipal(r.Context())
 	owner, abURI, rest := splitResourcePath(r.URL.Path, h.basePath)
+
+	if strings.HasPrefix(abURI, "ldap_") {
+		http.Error(w, "method not allowed - cannot create LDAP collections", http.StatusMethodNotAllowed)
+		return
+	}
+
 	if owner == "" || abURI == "" || len(rest) != 0 {
 		if o2, ab2, ok := tryAddressbookShorthand(r.URL.Path, h.basePath, pr.UserID); ok {
 			owner, abURI, rest = o2, ab2, nil
@@ -514,6 +526,12 @@ func (h *Handlers) HandleMkcalendar(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) HandleProppatch(w http.ResponseWriter, r *http.Request) {
 	owner, abURI, rest := splitResourcePath(r.URL.Path, h.basePath)
+
+	if strings.HasPrefix(abURI, "ldap_") {
+		http.Error(w, "method not allowed - LDAP addressbooks are read-only", http.StatusMethodNotAllowed)
+		return
+	}
+
 	if owner == "" || abURI == "" || len(rest) != 0 {
 		h.logger.Error().Str("path", r.URL.Path).Msg("PROPPATCH with invalid path")
 		http.Error(w, "bad path", http.StatusBadRequest)

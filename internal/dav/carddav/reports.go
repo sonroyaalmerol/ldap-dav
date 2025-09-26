@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
-	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
@@ -27,45 +26,32 @@ func (h *Handlers) ReportAddressbookQuery(w http.ResponseWriter, r *http.Request
 	pr := common.MustPrincipal(r.Context())
 	props := common.ParsePropRequest(q.Prop)
 
-	if strings.HasPrefix(addressbookID, "ldap_") {
-		contacts, err := h.dir.GetAddressbookContacts(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, addressbookID)
-		if err != nil {
-			h.logger.Error().Err(err).
-				Str("addressbookID", addressbookID).
-				Msg("failed to get LDAP contacts in addressbook-query")
-			http.Error(w, "directory error", http.StatusInternalServerError)
-			return
-		}
-
-		var resps []common.Response
-		for _, contact := range contacts {
-			hrefStr := common.JoinURL(h.basePath, "addressbooks", owner, abURI, contact.ID+".vcf")
-			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
-			_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/vcard; charset=utf-8"})
-
-			if props.AddressData {
-				type AddressData struct {
-					XMLName xml.Name `xml:"urn:ietf:params:xml:ns:carddav address-data"`
-					Text    string   `xml:",chardata"`
-				}
-				_ = resp.EncodeProp(http.StatusOK, AddressData{Text: contact.VCardData})
-			}
-
-			resps = append(resps, resp)
-		}
-
-		ms := common.MultiStatus{Responses: resps}
-		if err := common.ServeMultiStatus(w, &ms); err != nil {
-			h.logger.Error().Err(err).Msg("failed to serve MultiStatus for LDAP addressbook-query")
-		}
-		return
-	}
-
 	if ok := h.mustCanRead(w, r.Context(), pr, abURI, abOwner); !ok {
 		return
 	}
 
 	filterProps := common.ExtractPropFilterNames(q.Filter)
+
+	if strings.HasPrefix(addressbookID, "ldap_") {
+		dir := h.addressbookDirs[abURI]
+		if dir == nil {
+			http.NotFound(w, r)
+			return
+		}
+		contacts, err := dir.ListContacts(r.Context(), filterProps)
+		if err != nil {
+			http.Error(w, "ldap error", http.StatusInternalServerError)
+			return
+		}
+		var resps []common.Response
+		for _, ct := range contacts {
+			hrefStr := common.JoinURL(h.basePath, "addressbooks", owner, abURI, ct.ID+".vcf")
+			resps = append(resps, buildReportResponseLDAP(hrefStr, props, &ct))
+		}
+		ms := common.MultiStatus{Responses: resps}
+		_ = common.ServeMultiStatus(w, &ms)
+		return
+	}
 
 	contacts, err := h.store.ListContactsByFilter(r.Context(), addressbookID, filterProps)
 	if err != nil {
@@ -107,6 +93,28 @@ func (h *Handlers) ReportAddressbookMultiget(w http.ResponseWriter, r *http.Requ
 				Msg("failed to resolve addressbook in multiget")
 			continue
 		}
+
+		if strings.HasPrefix(addressbookID, "ldap_") {
+			dir := h.addressbookDirs[abURI]
+			if dir == nil {
+				h.logger.Debug().Err(err).
+					Str("addressbookID", addressbookID).
+					Str("uid", uid).
+					Msg("failed to get contact in multiget")
+				return
+			}
+			contact, err := dir.GetContact(r.Context(), uid)
+			if err != nil {
+				h.logger.Debug().Err(err).
+					Str("addressbookID", addressbookID).
+					Str("uid", uid).
+					Msg("failed to get contact in multiget")
+				continue
+			}
+			resps = append(resps, buildReportResponseLDAP(hrefStr, props, contact))
+			continue
+		}
+
 		pr := common.MustPrincipal(r.Context())
 		okRead, err := h.aclCheckRead(r.Context(), pr, abURI, abOwner)
 		if err != nil || !okRead {
@@ -165,6 +173,16 @@ func (h *Handlers) ReportSyncCollection(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
+
+	if strings.HasPrefix(addressbookID, "ldap_") {
+		ms := common.MultiStatus{
+			Responses: nil,
+			SyncToken: "seq:0",
+		}
+		_ = common.ServeMultiStatus(w, &ms)
+		return
+	}
+
 	pr := common.MustPrincipal(r.Context())
 	if ok := h.mustCanRead(w, r.Context(), pr, abURI, abOwner); !ok {
 		return

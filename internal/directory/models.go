@@ -1,10 +1,19 @@
 package directory
 
+import "context"
+
+type ContactDirectory interface {
+	ListAddressbooks(ctx context.Context) ([]Addressbook, error)
+	ListContacts(ctx context.Context, propFilter []string) ([]Contact, error)
+	GetContact(ctx context.Context, uid string) (*Contact, error)
+}
+
 type Addressbook struct {
 	ID          string
 	Name        string
 	Description string
 	Enabled     bool
+	URI         string
 }
 
 type Contact struct {
@@ -17,7 +26,7 @@ type Contact struct {
 	Phone        []string
 	Organization string
 	Title        string
-	VCardData    string // Raw vCard data
+	VCardData    string
 }
 
 type User struct {

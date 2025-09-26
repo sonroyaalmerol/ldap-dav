@@ -80,74 +80,91 @@ If gen_random_uuid() is unavailable, substitute a UUID and cast with ::uuid, or 
 - **CardDAV**: Personal address books at /dav/addressbooks/alice/{addressbook-uri}/
 - **CardDAV**: Global address books at /dav/addressbooks/alice/ldap_{N}/ (read-only, populated from LDAP filters)
 
-## Configuration (env vars)
+## Configuration
 
-### Core server
-- `HTTP_ADDR`: Server address (default `:8080`)
-- `HTTP_BASE_PATH`: Base path for DAV endpoints (default `/dav`)
-- `HTTP_MAX_ICS_BYTES`: Maximum ICS payload size in bytes (default `1048576` = 1 MiB)
-- `HTTP_MAX_VCF_BYTES`: Maximum VCF payload size in bytes (default `1048576` = 1 MiB)
-- `TZ`: Timezone (default `UTC`)
-- `LOG_LEVEL`: Logging level - `debug|info|warn|error` (default `info`)
+All configuration is via environment variables.
+
+### Core Server
+- `HTTP_ADDR`: Server address (default `":8080"`)
+- `HTTP_BASE_PATH`: Base path for DAV endpoints (default `"/dav"`)
+- `HTTP_MAX_ICS_BYTES`: Maximum ICS payload size in bytes (default `"1048576"` = 1 MiB)
+- `HTTP_MAX_VCF_BYTES`: Maximum VCF payload size in bytes (default `"1048576"` = 1 MiB)
+- `TZ`: Timezone (default `"UTC"`)
+- `LOG_LEVEL`: Logging level — `debug|info|warn|error` (default `"info"`)
 
 ### LDAP
-- `LDAP_URL`: LDAP server URL (default `ldap://localhost:389`)
+- `LDAP_URL`: LDAP server URL (default `"ldap://localhost:389"`)
 - `LDAP_BIND_DN`: Service account DN for LDAP binding
 - `LDAP_BIND_PASSWORD`: Service account password
-- `LDAP_USER_BASE_DN`: Base DN for user searches (e.g., `ou=People,dc=example,dc=com`)
-- `LDAP_GROUP_BASE_DN`: Base DN for group searches (e.g., `ou=Groups,dc=example,dc=com`)
-- `LDAP_USER_FILTER`: User search filter (default `(|(uid=%s)(mail=%s))`)
-- `LDAP_GROUP_FILTER`: Group search filter (default `(cn=%s)`)
-- `LDAP_MEMBER_ATTR`: Group membership attribute - `member|uniqueMember|memberUid` (default `member`)
-- `LDAP_CAL_IDS_ATTR`: Calendar IDs attribute for pair mode (default `caldavCalendars`)
-- `LDAP_PRIVS_ATTR`: Privileges attribute for pair mode (default `caldavPrivileges`)
-- `LDAP_BINDINGS_ATTR`: Compact bindings attribute (default `caldavBindings`) - recommended
-- `LDAP_TOKEN_USER_ATTR`: User attribute for token mapping (default `uid`)
-- `LDAP_NESTED`: Enable nested group resolution (default `false`)
-- `LDAP_SKIP_VERIFY`: Skip TLS certificate verification (default `false`)
-- `LDAP_REQUIRE_TLS`: Require TLS connection (default `false`)
+- `LDAP_USER_BASE_DN`: Base DN for user searches (e.g., `"ou=People,dc=example,dc=com"`)
+- `LDAP_GROUP_BASE_DN`: Base DN for group searches (e.g., `"ou=Groups,dc=example,dc=com"`)
+- `LDAP_USER_FILTER`: User search filter (default `"(|(uid=%s)(mail=%s))"`)
+- `LDAP_GROUP_FILTER`: Group search filter (default `"(cn=%s)"`)
+- `LDAP_MEMBER_ATTR`: Group membership attribute — `member|uniqueMember|memberUid` (default `"member"`)
+- `LDAP_CAL_IDS_ATTR`: Calendar IDs attribute for pair mode (default `"caldavCalendars"`)
+- `LDAP_PRIVS_ATTR`: Privileges attribute for pair mode (default `"caldavPrivileges"`)
+- `LDAP_BINDINGS_ATTR`: Compact bindings attribute (default `"caldavBindings"`) — recommended
+- `LDAP_TOKEN_USER_ATTR`: User attribute for token mapping (default `"uid"`)
+- `LDAP_NESTED`: Enable nested group resolution (default `"false"`)
+- `LDAP_SKIP_VERIFY`: Skip TLS certificate verification (default `"false"`)
+- `LDAP_REQUIRE_TLS`: Require TLS connection (default `"false"`)
 
-### LDAP Addressbook Filters
-Configure global read-only address books from LDAP using numbered environment variables. Each filter creates a shared address book accessible to all users:
+LDAP timeouts and caching:
+- Fixed defaults: `Timeout = 5s`, `Cache TTL = 60s`, `MaxGroupDepth = 3`
 
-- `LDAP_ADDRESSBOOK_FILTER_{N}_NAME`: Filter name (default `Addressbook_{N}`)
-- `LDAP_ADDRESSBOOK_FILTER_{N}_BASE_DN`: Base DN for this filter (default: uses `LDAP_USER_BASE_DN`)
-- `LDAP_ADDRESSBOOK_FILTER_{N}_FILTER`: LDAP filter expression (default `(objectClass=person)`)
-- `LDAP_ADDRESSBOOK_FILTER_{N}_ENABLED`: Enable this filter (default `true`)
+### LDAP Addressbook Filters (Shared Directories)
+
+Define global read-only address books sourced directly from LDAP using numbered
+variables. Each index `N` creates one shared address book accessible to all users.
+
+Common variables per `N`:
+- `LDAP_ADDRESSBOOK_FILTER_{N}_URL`: LDAP URL for this filter (default falls back to `LDAP_URL`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_BIND_DN`: DN for this filter (default `LDAP_BIND_DN`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_BIND_PASSWORD`: Password (default `LDAP_BIND_PASSWORD`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_SKIP_VERIFY`: `"true"`/`"false"` (default `LDAP_SKIP_VERIFY`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_REQUIRE_TLS`: `"true"`/`"false"` (default `LDAP_REQUIRE_TLS`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_NAME`: Name (default `"Addressbook_{N}"`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_BASE_DN`: Base DN (default `LDAP_USER_BASE_DN`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_FILTER`: LDAP filter (default `"(objectClass=person)"`)
+- `LDAP_ADDRESSBOOK_FILTER_{N}_ENABLED`: `"true"`/`"false"` (default `"true"`)
 - `LDAP_ADDRESSBOOK_FILTER_{N}_DESCRIPTION`: Optional description
+- `LDAP_ADDRESSBOOK_FILTER_{N}_URI`: Slug/URI for address book (default slug of `NAME`)
 
-Example:
-```bash
-LDAP_ADDRESSBOOK_FILTER_0_NAME="Company Directory"
-LDAP_ADDRESSBOOK_FILTER_0_BASE_DN="ou=People,dc=example,dc=com"
-LDAP_ADDRESSBOOK_FILTER_0_FILTER="(objectClass=person)"
-LDAP_ADDRESSBOOK_FILTER_0_ENABLED="true"
-LDAP_ADDRESSBOOK_FILTER_0_DESCRIPTION="All company employees"
+Attribute mappings (optional, with defaults):
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_DISPLAY_NAME`: default `"displayName"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_FIRST_NAME`: default `"givenName"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_LAST_NAME`: default `"sn"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_EMAIL`: default `"mail"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_PHONE`: default `"telephoneNumber"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_ORGANIZATION`: default `"o"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_TITLE`: default `"title"`
+- `LDAP_ADDRESSBOOK_FILTER_{N}_MAP_PHOTO`: default `"jpegPhoto"`
 
-LDAP_ADDRESSBOOK_FILTER_1_NAME="IT Department"
-LDAP_ADDRESSBOOK_FILTER_1_BASE_DN="ou=IT,ou=People,dc=example,dc=com"
-LDAP_ADDRESSBOOK_FILTER_1_FILTER="(&(objectClass=person)(department=IT))"
-```
+Notes:
+- Filters are discovered via `LDAP_ADDRESSBOOK_FILTER_0`, `_1`, ... up to `99`.
+- A filter is included when either the base variable, `NAME`, or `BASE_DN` is set.
+- `URI` defaults to a slug of `NAME` if not provided.
 
 ### Authentication
-- `AUTH_BASIC`: Enable HTTP Basic authentication (default `true`)
-- `AUTH_BEARER`: Enable Bearer token authentication (default `true`)
+- `AUTH_BASIC`: Enable HTTP Basic auth (default `"true"`)
+- `AUTH_BEARER`: Enable Bearer token auth (default `"true"`)
 - `AUTH_JWKS_URL`: JWKS endpoint URL for JWT validation (cached)
 - `AUTH_ISSUER`: Expected JWT issuer (optional)
 - `AUTH_AUDIENCE`: Expected JWT audience (optional)
-- `AUTH_ALLOW_OPAQUE`: Allow opaque token introspection (default `false`)
+- `AUTH_ALLOW_OPAQUE`: Allow opaque token introspection (default `"false"`)
 - `AUTH_INTROSPECT_URL`: RFC 7662 token introspection endpoint (optional)
 - `AUTH_INTROSPECT_AUTH`: Authorization header for introspection requests
 
 ### Storage
-- `STORAGE_TYPE`: Storage backend - `postgres|sqlite` (default `postgres`)
-- `PG_URL`: PostgreSQL connection string (default `postgres://postgres:postgres@localhost:5432/caldav?sslmode=disable`)
+- `STORAGE_TYPE`: `postgres|sqlite` (default `"postgres"`)
+- `PG_URL`: PostgreSQL connection string (default `"postgres://postgres:postgres@localhost:5432/caldav?sslmode=disable"`)
+- `SQLITE_PATH`: SQLite file path when `STORAGE_TYPE=sqlite` (default `"/data/db.sql"`)
 
 ### ICS Generation
-- `ICS_COMPANY_NAME`: Company name in generated ICS files (default `LDAP DAV`)
-- `ICS_PRODUCT_NAME`: Product name in generated ICS files (default `CalDAV`)
-- `ICS_VERSION`: Version string in generated ICS files (default `1.0.0`)
-- `ICS_LANGUAGE`: Language code for generated ICS files (default `EN`)
+- `ICS_COMPANY_NAME`: Company name in generated ICS files (default `"LDAP DAV"`)
+- `ICS_PRODUCT_NAME`: Product name in generated ICS files (default `"CalDAV"`)
+- `ICS_VERSION`: Version string in generated ICS files (default `"1.0.0"`)
+- `ICS_LANGUAGE`: Language code for generated ICS files (default `"EN"`)
 
 ## LDAP group ACL model (CalDAV only)
 

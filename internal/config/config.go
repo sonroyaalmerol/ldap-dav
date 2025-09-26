@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/gosimple/slug"
 )
 
 type HTTPConfig struct {
@@ -15,11 +17,25 @@ type HTTPConfig struct {
 }
 
 type LDAPAddressbookFilter struct {
-	Name        string
-	BaseDN      string
-	Filter      string
-	Enabled     bool
-	Description string
+	URL                string
+	BindDN             string
+	BindPassword       string
+	InsecureSkipVerify bool
+	RequireTLS         bool
+	Name               string
+	BaseDN             string
+	Filter             string
+	Enabled            bool
+	Description        string
+	URI                string
+	MapDisplayName     string
+	MapFirstName       string
+	MapLastName        string
+	MapEmail           string
+	MapPhone           string
+	MapOrganization    string
+	MapTitle           string
+	MapPhoto           string
 }
 
 type LDAPConfig struct {
@@ -93,11 +109,25 @@ func loadAddressbookFilters() []LDAPAddressbookFilter {
 		}
 
 		filter := LDAPAddressbookFilter{
-			Name:        getenv(prefix+"_NAME", fmt.Sprintf("Addressbook_%d", i)),
-			BaseDN:      getenv(prefix+"_BASE_DN", getenv("LDAP_USER_BASE_DN", "")),
-			Filter:      getenv(prefix+"_FILTER", "(objectClass=person)"),
-			Enabled:     getenv(prefix+"_ENABLED", "true") == "true",
-			Description: getenv(prefix+"_DESCRIPTION", ""),
+			URL:                getenv(prefix+"_URL", getenv("LDAP_URL", "ldap://localhost:389")),
+			BindDN:             getenv(prefix+"_BIND_DN", getenv("LDAP_BIND_DN", "")),
+			BindPassword:       getenv(prefix+"_BIND_PASSWORD", getenv("LDAP_BIND_PASSWORD", "")),
+			InsecureSkipVerify: getenv(prefix+"_SKIP_VERIFY", getenv("LDAP_SKIP_VERIFY", "false")) == "true",
+			RequireTLS:         getenv(prefix+"_REQUIRE_TLS", getenv("LDAP_REQUIRE_TLS", "false")) == "true",
+			Name:               getenv(prefix+"_NAME", fmt.Sprintf("Addressbook_%d", i)),
+			BaseDN:             getenv(prefix+"_BASE_DN", getenv("LDAP_USER_BASE_DN", "")),
+			Filter:             getenv(prefix+"_FILTER", "(objectClass=person)"),
+			Enabled:            getenv(prefix+"_ENABLED", "true") == "true",
+			Description:        getenv(prefix+"_DESCRIPTION", ""),
+			URI:                getenv(prefix+"_URI", slug.Make(fmt.Sprintf("Addressbook_%d", i))),
+			MapDisplayName:     getenv(prefix+"_MAP_DISPLAY_NAME", "displayName"),
+			MapFirstName:       getenv(prefix+"_MAP_FIRST_NAME", "givenName"),
+			MapLastName:        getenv(prefix+"_MAP_LAST_NAME", "sn"),
+			MapEmail:           getenv(prefix+"_MAP_EMAIL", "mail"),
+			MapPhone:           getenv(prefix+"_MAP_PHONE", "telephoneNumber"),
+			MapOrganization:    getenv(prefix+"_MAP_ORGANIZATION", "o"),
+			MapTitle:           getenv(prefix+"_MAP_TITLE", "title"),
+			MapPhoto:           getenv(prefix+"_MAP_PHOTO", "jpegPhoto"),
 		}
 
 		// If NAME or BASE_DN is explicitly set, or if the base var exists, include this filter
