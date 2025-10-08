@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/cache"
@@ -31,49 +32,122 @@ type LDAPClient struct {
 	cfg          config.LDAPConfig
 	logger       zerolog.Logger
 	conn         *ldap.Conn
+	connMu       sync.RWMutex
 	cache        *cache.Cache[string, []GroupACL]
 	contactCache *cache.Cache[string, []Contact]
 }
 
 func NewLDAPClient(cfg config.LDAPConfig, logger zerolog.Logger) (*LDAPClient, error) {
-	l, err := dialLDAPAuto(cfg)
-	if err != nil {
-		logger.Error().Err(err).Str("url", cfg.URL).Msg("failed to dial LDAP")
-		return nil, err
-	}
-	if cfg.BindDN != "" {
-		if err := l.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
-			logger.Error().Err(err).Str("bind_dn", cfg.BindDN).Msg("initial bind failed")
-			l.Close()
-			return nil, err
-		}
-	}
-	aclCache := cache.New[string, []GroupACL](cfg.CacheTTL)
-	contactCache := cache.New[string, []Contact](cfg.CacheTTL)
-	return &LDAPClient{
+	client := &LDAPClient{
 		cfg:          cfg,
 		logger:       logger,
-		conn:         l,
-		cache:        aclCache,
-		contactCache: contactCache,
-	}, nil
+		cache:        cache.New[string, []GroupACL](cfg.CacheTTL),
+		contactCache: cache.New[string, []Contact](cfg.CacheTTL),
+	}
+
+	if err := client.connect(); err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
+func (l *LDAPClient) connect() error {
+	conn, err := dialLDAPAuto(l.cfg)
+	if err != nil {
+		l.logger.Error().Err(err).Str("url", l.cfg.URL).Msg("failed to dial LDAP")
+		return err
+	}
+
+	if l.cfg.BindDN != "" {
+		if err := conn.Bind(l.cfg.BindDN, l.cfg.BindPassword); err != nil {
+			l.logger.Error().Err(err).Str("bind_dn", l.cfg.BindDN).Msg("initial bind failed")
+			conn.Close()
+			return err
+		}
+	}
+
+	l.connMu.Lock()
+	if l.conn != nil {
+		l.conn.Close()
+	}
+	l.conn = conn
+	l.connMu.Unlock()
+
+	return nil
+}
+
+func (l *LDAPClient) reconnect() error {
+	l.logger.Warn().Msg("attempting to reconnect to LDAP server")
+	return l.connect()
+}
+
+func (l *LDAPClient) getConn() *ldap.Conn {
+	l.connMu.RLock()
+	defer l.connMu.RUnlock()
+	return l.conn
+}
+
+func (l *LDAPClient) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "EOF") ||
+		ldap.IsErrorWithCode(err, ldap.ErrorNetwork)
+}
+
+func (l *LDAPClient) executeWithRetry(fn func(*ldap.Conn) error) error {
+	conn := l.getConn()
+	err := fn(conn)
+
+	if l.isConnectionError(err) {
+		l.logger.Debug().Err(err).Msg("connection error detected, attempting reconnect")
+		if reconnErr := l.reconnect(); reconnErr != nil {
+			l.logger.Error().Err(reconnErr).Msg("reconnection failed")
+			return err
+		}
+		// Retry once with new connection
+		conn = l.getConn()
+		return fn(conn)
+	}
+
+	return err
 }
 
 func (l *LDAPClient) Close() {
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
 	if l.conn != nil {
 		l.conn.Close()
+		l.conn = nil
 	}
 }
 
 func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*User, error) {
-	searchReq := ldap.NewSearchRequest(
-		l.cfg.UserBaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
-		fmt.Sprintf(l.cfg.UserFilter, ldap.EscapeFilter(username), ldap.EscapeFilter(username)),
-		userAttrList(l.cfg),
-		nil,
-	)
-	res, err := l.conn.SearchWithPaging(searchReq, 1)
+	var entry *ldap.Entry
+
+	err := l.executeWithRetry(func(conn *ldap.Conn) error {
+		searchReq := ldap.NewSearchRequest(
+			l.cfg.UserBaseDN,
+			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
+			fmt.Sprintf(l.cfg.UserFilter, ldap.EscapeFilter(username), ldap.EscapeFilter(username)),
+			userAttrList(l.cfg),
+			nil,
+		)
+		res, err := conn.SearchWithPaging(searchReq, 1)
+		if err != nil {
+			return err
+		}
+		if len(res.Entries) == 0 {
+			return errors.New("user not found")
+		}
+		entry = res.Entries[0]
+		return nil
+	})
+
 	if err != nil {
 		l.logger.Error().Err(err).
 			Str("user_base_dn", l.cfg.UserBaseDN).
@@ -81,11 +155,7 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 			Msg("LDAP search failed in BindUser")
 		return nil, errors.New("user not found")
 	}
-	if len(res.Entries) == 0 {
-		l.logger.Debug().Str("username", username).Msg("user not found in BindUser search")
-		return nil, errors.New("user not found")
-	}
-	entry := res.Entries[0]
+
 	userDN := entry.DN
 
 	userConn, err := dialLDAPAuto(l.cfg)
@@ -94,6 +164,7 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 		return nil, err
 	}
 	defer userConn.Close()
+
 	if err := userConn.Bind(userDN, password); err != nil {
 		l.logger.Debug().Err(err).Str("user_dn", userDN).Msg("user bind failed")
 		return nil, err
@@ -110,14 +181,27 @@ func (l *LDAPClient) BindUser(ctx context.Context, username, password string) (*
 
 func (l *LDAPClient) LookupUserByAttr(ctx context.Context, attr, value string) (*User, error) {
 	attr = safeAttr(attr)
-	searchReq := ldap.NewSearchRequest(
-		l.cfg.UserBaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
-		fmt.Sprintf("(%s=%s)", attr, ldap.EscapeFilter(value)),
-		[]string{"dn", "uid", "cn", "displayName", "mail"},
-		nil,
-	)
-	res, err := l.conn.Search(searchReq)
+	var entry *ldap.Entry
+
+	err := l.executeWithRetry(func(conn *ldap.Conn) error {
+		searchReq := ldap.NewSearchRequest(
+			l.cfg.UserBaseDN,
+			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, int(l.cfg.Timeout.Seconds()), false,
+			fmt.Sprintf("(%s=%s)", attr, ldap.EscapeFilter(value)),
+			[]string{"dn", "uid", "cn", "displayName", "mail"},
+			nil,
+		)
+		res, err := conn.Search(searchReq)
+		if err != nil {
+			return err
+		}
+		if len(res.Entries) == 0 {
+			return errors.New("user not found")
+		}
+		entry = res.Entries[0]
+		return nil
+	})
+
 	if err != nil {
 		l.logger.Error().Err(err).
 			Str("attr", attr).
@@ -126,16 +210,12 @@ func (l *LDAPClient) LookupUserByAttr(ctx context.Context, attr, value string) (
 			Msg("LDAP search failed in LookupUserByAttr")
 		return nil, errors.New("user not found")
 	}
-	if len(res.Entries) == 0 {
-		l.logger.Debug().Str("attr", attr).Str("value", value).Msg("user not found in LookupUserByAttr")
-		return nil, errors.New("user not found")
-	}
-	e := res.Entries[0]
+
 	return &User{
-		UID:         firstNonEmpty(e.GetAttributeValue(l.cfg.TokenUserAttr), e.GetAttributeValue("mail")),
-		DN:          e.DN,
-		DisplayName: firstNonEmpty(e.GetAttributeValue("displayName"), e.GetAttributeValue("cn")),
-		Mail:        e.GetAttributeValue("mail"),
+		UID:         firstNonEmpty(entry.GetAttributeValue(l.cfg.TokenUserAttr), entry.GetAttributeValue("mail")),
+		DN:          entry.DN,
+		DisplayName: firstNonEmpty(entry.GetAttributeValue("displayName"), entry.GetAttributeValue("cn")),
+		Mail:        entry.GetAttributeValue("mail"),
 	}, nil
 }
 
@@ -143,15 +223,23 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 	if v, ok := l.cache.Get(user.DN); ok {
 		return v, nil
 	}
+
+	var res *ldap.SearchResult
 	memFilter := fmt.Sprintf("(%s=%s)", safeAttr(l.cfg.MemberAttr), ldap.EscapeFilter(user.DN))
-	search := ldap.NewSearchRequest(
-		l.cfg.GroupBaseDN,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(l.cfg.Timeout.Seconds()), false,
-		fmt.Sprintf("(&%s%s)", "(objectClass=groupOfNames)", memFilter),
-		attrList(l.cfg),
-		nil,
-	)
-	res, err := l.conn.Search(search)
+
+	err := l.executeWithRetry(func(conn *ldap.Conn) error {
+		search := ldap.NewSearchRequest(
+			l.cfg.GroupBaseDN,
+			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(l.cfg.Timeout.Seconds()), false,
+			fmt.Sprintf("(&%s%s)", "(objectClass=groupOfNames)", memFilter),
+			attrList(l.cfg),
+			nil,
+		)
+		var err error
+		res, err = conn.Search(search)
+		return err
+	})
+
 	if err != nil {
 		l.logger.Error().Err(err).
 			Str("group_base_dn", l.cfg.GroupBaseDN).
@@ -160,6 +248,7 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 			Msg("LDAP search failed in UserGroupsACL")
 		return nil, err
 	}
+
 	var acls []GroupACL
 	for _, e := range res.Entries {
 		if l.cfg.BindingsAttr != "" {
