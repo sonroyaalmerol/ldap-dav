@@ -144,6 +144,11 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logger.Debug().
+		Str("raw_body", string(raw)).
+		Str("url_uid", uid).
+		Msg("received PUT body")
+
 	component, err := ical.DetectICSComponent(raw)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("unsupported calendar component in PUT")
@@ -213,17 +218,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	var master *ical.Event
 	var exceptions []*ical.Event
 
-	removeMe := true
-	for i, event := range events {
-		if removeMe {
-			h.logger.Debug().
-				Int("index", i).
-				Str("uid", event.UID).
-				Str("expected_uid", uid).
-				Interface("recurrence_id", event.RecurrenceID).
-				Msg("parsed event")
-			continue
-		}
+	for _, event := range events {
 		if event.UID != "" && event.UID != uid {
 			h.logger.Error().
 				Str("expected_uid", uid).
@@ -244,9 +239,6 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			}
 			master = event
 		}
-	}
-	if removeMe {
-		return
 	}
 
 	// Handle case: Client sends only exception (modifying single instance)
