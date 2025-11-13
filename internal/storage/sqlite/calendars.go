@@ -221,39 +221,22 @@ func (s *Store) putObjectInTx(tx *sql.Tx, obj *storage.Object) error {
 
 	obj.ETag = uuid.Must(uuid.NewV7()).String()
 
-	// Try INSERT first
 	_, err = tx.Exec(`
 		INSERT INTO calendar_objects (
-			id, calendar_id, uid, etag, data, component, start_at, end_at
+			id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, datetime('now')
 		)
+		ON CONFLICT(id) DO UPDATE SET
+			etag = excluded.etag,
+			data = excluded.data,
+			component = excluded.component,
+			start_at = excluded.start_at,
+			end_at = excluded.end_at,
+			updated_at = datetime('now')
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
 
-	if err != nil {
-		// INSERT failed, try UPDATE
-		result, updateErr := tx.Exec(`
-			UPDATE calendar_objects SET
-				etag = ?,
-				data = ?,
-				component = ?,
-				start_at = ?,
-				end_at = ?,
-				updated_at = datetime('now')
-			WHERE id = ?
-		`, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt, obj.ID)
-
-		if updateErr != nil {
-			return updateErr
-		}
-
-		rows, _ := result.RowsAffected()
-		if rows == 0 {
-			return fmt.Errorf("failed to insert or update object")
-		}
-	}
-
-	return nil
+	return err
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {

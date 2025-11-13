@@ -363,21 +363,18 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 	var query string
 
 	if isException {
-		// Find existing exception by matching RECURRENCE-ID in data
 		query = `
 			SELECT id::text FROM calendar_objects 
 			WHERE calendar_id::text = $1 AND uid = $2 
 			AND data LIKE $3
 			LIMIT 1
 		`
-		// Extract RECURRENCE-ID value for matching
 		recIDValue := utils.ExtractRecurrenceIDValue(obj.Data)
 		err := tx.QueryRow(ctx, query, obj.CalendarID, obj.UID, "%RECURRENCE-ID%"+recIDValue+"%").Scan(&existingID)
 		if err != nil && err != pgx.ErrNoRows {
 			return err
 		}
 	} else {
-		// Master event: no RECURRENCE-ID
 		query = `
 			SELECT id::text FROM calendar_objects 
 			WHERE calendar_id::text = $1 AND uid = $2 
@@ -398,7 +395,6 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 
 	obj.ETag = uuid.Must(uuid.NewV7()).String()
 
-	// Use INSERT ... ON CONFLICT with a trick: conflict only if same data pattern
 	_, err := tx.Exec(ctx, `
 		INSERT INTO calendar_objects (
 			id, calendar_id, uid, etag, data, component, start_at, end_at
@@ -413,36 +409,6 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 			end_at = excluded.end_at,
 			updated_at = now()
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-
-	if err != nil {
-		// If INSERT failed due to no conflict, try UPDATE
-		result, updateErr := tx.Exec(ctx, `
-			UPDATE calendar_objects SET
-				etag = $1,
-				data = $2,
-				component = $3,
-				start_at = $4,
-				end_at = $5,
-				updated_at = now()
-			WHERE id::text = $6
-		`, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt, obj.ID)
-
-		if updateErr != nil {
-			return updateErr
-		}
-
-		if result.RowsAffected() == 0 {
-			// Neither INSERT nor UPDATE worked, do plain INSERT
-			_, err = tx.Exec(ctx, `
-				INSERT INTO calendar_objects (
-					id, calendar_id, uid, etag, data, component, start_at, end_at
-				) VALUES (
-					$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
-				)
-			`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-			return err
-		}
-	}
 
 	return err
 }
