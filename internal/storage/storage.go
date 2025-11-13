@@ -75,10 +75,8 @@ type Store interface {
 	ListChangesSince(ctx context.Context, calendarID string, sinceSeq int64, limit int) ([]Change, int64, error)
 
 	// Recurrence handlers
-	GetMasterEvent(ctx context.Context, calendarID, uid string) (*Object, error)
 	GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*Object, error)
 	PutEventWithExceptions(ctx context.Context, master *Object, exceptions []*Object) error
-	DeleteEventInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time) error
 
 	CreateAddressbook(a Addressbook, ownerGroup string, description string) error
 	DeleteAddressbook(ownerUserID, abURI string) error

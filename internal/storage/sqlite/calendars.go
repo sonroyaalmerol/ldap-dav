@@ -382,22 +382,6 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 	return out, last, nil
 }
 
-func (s *Store) GetMasterEvent(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
-		FROM calendar_objects 
-		WHERE calendar_id = ? AND uid = ?
-		AND data NOT LIKE '%RECURRENCE-ID%'
-		LIMIT 1
-	`, calendarID, uid)
-
-	var o storage.Object
-	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
-		return nil, err
-	}
-	return &o, nil
-}
-
 func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*storage.Object, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
@@ -442,43 +426,6 @@ func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Obje
 		}
 
 		if err := s.recordChangeInTx(tx, master.CalendarID, master.UID, false); err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-func (s *Store) DeleteEventInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time) error {
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		var err error
-
-		if recurrenceID == nil {
-			// Delete all instances including master and exceptions
-			_, err = tx.Exec(`
-				DELETE FROM calendar_objects 
-				WHERE calendar_id = ? AND uid = ?
-			`, calendarID, uid)
-		} else {
-			// Delete specific exception instance
-			recIDStr := recurrenceID.Format("20060102T150405Z")
-			recIDStrDate := recurrenceID.Format("20060102")
-			_, err = tx.Exec(`
-				DELETE FROM calendar_objects 
-				WHERE calendar_id = ? AND uid = ?
-				AND (data LIKE '%RECURRENCE-ID%' || ? || '%' OR data LIKE '%RECURRENCE-ID%' || ? || '%')
-			`, calendarID, uid, recIDStr, recIDStrDate)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if err := s.updateCalendarCTagInTx(tx, calendarID); err != nil {
-			return err
-		}
-
-		if err := s.recordChangeInTx(tx, calendarID, uid, true); err != nil {
 			return err
 		}
 

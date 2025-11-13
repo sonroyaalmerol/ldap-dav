@@ -55,15 +55,46 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse potential recurring instance path
-	recurrenceID, baseUID := h.parseInstancePath(r.URL.Path)
-	if recurrenceID != nil {
-		h.serveRecurringInstance(w, r, calendarID, baseUID, recurrenceID)
+	// Get the master event
+	obj, err := h.store.GetObject(r.Context(), calendarID, uid)
+	if err != nil {
+		h.logger.Error().Err(err).Str("calendarID", calendarID).Str("uid", uid).Msg("failed to get object in GET")
+		http.NotFound(w, r)
 		return
 	}
 
-	// Serve regular object
-	h.serveObject(w, r, calendarID, uid)
+	if etag := common.TrimQuotes(r.Header.Get("If-None-Match")); etag != "" && etag == obj.ETag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// Get exceptions if this is a recurring event
+	exceptions, err := h.store.GetEventExceptions(r.Context(), calendarID, uid)
+	if err != nil {
+		h.logger.Warn().Err(err).Str("uid", uid).Msg("failed to get exceptions, serving master only")
+		h.writeObjectResponse(w, obj)
+		return
+	}
+
+	// Combine master + exceptions into a single iCalendar response
+	if len(exceptions) > 0 {
+		combinedData, err := h.combineEventWithExceptions(obj, exceptions)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("failed to combine event with exceptions")
+			h.writeObjectResponse(w, obj)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+		w.Header().Set("ETag", `"`+obj.ETag+`"`)
+		if !obj.UpdatedAt.IsZero() {
+			w.Header().Set("Last-Modified", obj.UpdatedAt.UTC().Format(time.RFC1123))
+		}
+		_, _ = w.Write([]byte(combinedData))
+		return
+	}
+
+	h.writeObjectResponse(w, obj)
 }
 
 func (h *Handlers) serveObject(w http.ResponseWriter, r *http.Request, calendarID, uid string) {
@@ -112,11 +143,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	pr := common.MustPrincipal(r.Context())
 
-	// Parse potential recurring instance path
-	recurrenceID, baseUID := h.parseInstancePath(r.URL.Path)
-	lookupUID := baseUID
-
-	existing, _ := h.store.GetObject(r.Context(), calendarID, lookupUID)
+	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
 
 	// Check permissions
 	if pr.UserID != calOwner {
@@ -139,6 +166,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse calendar data - may contain master + exceptions
 	events, err := ical.ParseCalendar(raw)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("failed to parse incoming calendar")
@@ -157,15 +185,15 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		h.logger.Debug().Str("component", component).Msg("storing non-VEVENT component")
 
 		// Validate ETags
-		if !h.validateETags(r, existing, recurrenceID) {
+		if !h.validateETags(r, existing, nil) {
 			http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 			return
 		}
 
-		// Store as raw object (non-VEVENT components don't support recurrence modifications)
+		// Store as raw object
 		obj := &storage.Object{
 			CalendarID: calendarID,
-			UID:        lookupUID,
+			UID:        uid,
 			Data:       string(raw),
 			Component:  component,
 		}
@@ -176,7 +204,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		storedObj, err := h.store.GetObject(r.Context(), calendarID, lookupUID)
+		storedObj, err := h.store.GetObject(r.Context(), calendarID, uid)
 		if err != nil {
 			h.logger.Warn().Err(err).Msg("stored but failed to retrieve object")
 			if existing == nil {
@@ -196,47 +224,50 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	incomingEvent := events[0]
-	incomingEvent.UID = lookupUID
+	// Validate that all events have the same UID
+	for _, event := range events {
+		if event.UID != "" && event.UID != uid {
+			h.logger.Error().
+				Str("expected_uid", uid).
+				Str("event_uid", event.UID).
+				Msg("event UID mismatch")
+			http.Error(w, "UID mismatch", http.StatusBadRequest)
+			return
+		}
+		event.UID = uid // Ensure UID matches URL
+	}
 
 	// Validate ETags
-	if !h.validateETags(r, existing, recurrenceID) {
+	if !h.validateETags(r, existing, nil) {
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
 
-	// Determine modification type
-	modType := h.determineModificationType(r, recurrenceID, incomingEvent)
-
-	// Prepare and store events
-	req := &ical.EventPutRequest{
-		Event:                incomingEvent,
-		ModificationType:     modType,
-		OriginalRecurrenceID: recurrenceID,
-		PreserveExceptions:   existing != nil,
-	}
-
-	eventsToStore, err := h.recurrenceManager.PrepareEventPut(req)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to prepare event for storage")
-		http.Error(w, fmt.Sprintf("failed to prepare event: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if len(eventsToStore) == 0 {
-		h.logger.Error().Msg("no events to store after preparation")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.storeEvents(r.Context(), calendarID, eventsToStore); err != nil {
+	// Store all events (master + exceptions) together
+	if err := h.storeEvents(r.Context(), calendarID, events); err != nil {
 		h.logger.Error().Err(err).Msg("failed to store events")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	// Return response
-	h.writeStoredEventResponse(w, r.Context(), calendarID, lookupUID, recurrenceID, existing == nil)
+	storedObj, err := h.store.GetObject(r.Context(), calendarID, uid)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("stored but failed to retrieve object")
+		if existing == nil {
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+
+	w.Header().Set("ETag", `"`+storedObj.ETag+`"`)
+	if existing == nil {
+		w.WriteHeader(http.StatusCreated)
+	} else {
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -284,10 +315,8 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse potential recurring instance path
-	recurrenceID, baseUID := h.parseInstancePath(r.URL.Path)
-
-	existing, err := h.store.GetObject(r.Context(), calendarID, baseUID)
+	// Get the existing object
+	existing, err := h.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("object not found")
 		http.NotFound(w, r)
@@ -295,19 +324,16 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate ETag
-	if !h.validateETags(r, existing, recurrenceID) {
+	if !h.validateETags(r, existing, nil) {
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
 
-	// Determine modification type
-	modType := h.determineModificationType(r, recurrenceID, nil)
-
-	// Handle delete based on type
-	if modType == ical.ModifyAll && recurrenceID == nil {
-		h.deleteEntireEvent(r.Context(), calendarID, baseUID)
-	} else {
-		h.deleteRecurringInstance(r.Context(), calendarID, baseUID, recurrenceID, modType, existing)
+	// Delete the entire event (master + all exceptions)
+	if err := h.deleteEntireEvent(r.Context(), calendarID, uid); err != nil {
+		h.logger.Error().Err(err).Str("uid", uid).Msg("failed to delete event")
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -340,43 +366,13 @@ func (h *Handlers) deleteEntireEvent(ctx context.Context, calendarID, uid string
 		h.logger.Warn().Err(err).Str("uid", uid).Msg("failed to get exceptions before delete")
 	}
 
-	// Delete all exceptions
 	for _, exc := range exceptions {
 		if err := h.store.DeleteObject(ctx, calendarID, exc.UID, ""); err != nil {
 			h.logger.Warn().Err(err).Str("uid", exc.UID).Msg("failed to delete exception")
 		}
 	}
 
-	// Delete master
-	return h.store.DeleteEventInstance(ctx, calendarID, uid, nil)
-}
-
-func (h *Handlers) deleteRecurringInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time, modType ical.RecurrenceModification, existing *storage.Object) error {
-	events, err := ical.ParseCalendar([]byte(existing.Data))
-	if err != nil {
-		return err
-	}
-
-	if len(events) == 0 {
-		return fmt.Errorf("no events in calendar data")
-	}
-
-	deleteReq := &ical.EventDeleteRequest{
-		UID:              uid,
-		ModificationType: modType,
-		RecurrenceID:     recurrenceID,
-	}
-
-	modifiedMaster, err := h.recurrenceManager.PrepareEventDelete(deleteReq, events[0])
-	if err != nil {
-		return err
-	}
-
-	if modifiedMaster == nil {
-		return h.store.DeleteEventInstance(ctx, calendarID, uid, nil)
-	}
-
-	return h.storeEvents(ctx, calendarID, []*ical.Event{modifiedMaster})
+	return h.store.DeleteObject(ctx, calendarID, uid, "")
 }
 
 func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {

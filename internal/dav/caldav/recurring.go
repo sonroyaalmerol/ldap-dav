@@ -5,60 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
-
-func (h *Handlers) serveRecurringInstance(w http.ResponseWriter, r *http.Request, calendarID, baseUID string, recurrenceID *time.Time) {
-	masterObj, exceptions, err := h.getCompleteRecurringEvent(r.Context(), calendarID, baseUID)
-	if err != nil {
-		h.logger.Error().Err(err).Str("calendarID", calendarID).Str("baseUID", baseUID).Msg("failed to get master object for recurring instance")
-		http.NotFound(w, r)
-		return
-	}
-
-	// Check for explicit exception first
-	if excObj := h.findException(exceptions, recurrenceID); excObj != nil {
-		if etag := common.TrimQuotes(r.Header.Get("If-None-Match")); etag != "" && etag == excObj.ETag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		h.writeObjectResponse(w, excObj)
-		return
-	}
-
-	// Expand from master
-	event := h.expandSingleInstance(masterObj, recurrenceID)
-	if event == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	instanceETag := h.generateInstanceETag(masterObj.ETag, event)
-	if etag := common.TrimQuotes(r.Header.Get("If-None-Match")); etag != "" && etag == instanceETag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	instanceData, err := ical.SerializeEvent(event)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to serialize event instance")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	w.Header().Set("ETag", `"`+instanceETag+`"`)
-	if !masterObj.UpdatedAt.IsZero() {
-		w.Header().Set("Last-Modified", masterObj.UpdatedAt.UTC().Format(time.RFC1123))
-	}
-	_, _ = w.Write(instanceData)
-}
 
 func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*storage.Object, start, end time.Time, props common.PropRequest, owner, calURI string) []common.Response {
 	var resps []common.Response
@@ -94,11 +46,16 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 
 		// Get exceptions for this recurring event
 		exceptions, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
-		exceptionMap := make(map[string]*storage.Object)
+		exceptionMap := make(map[string]*ical.Event)
+
 		for _, exc := range exceptions {
-			if excEvents, err := ical.ParseCalendar([]byte(exc.Data)); err == nil && len(excEvents) > 0 && excEvents[0].RecurrenceID != nil {
-				key := excEvents[0].RecurrenceID.Format("20060102T150405Z")
-				exceptionMap[key] = exc
+			if excEvents, err := ical.ParseCalendar([]byte(exc.Data)); err == nil {
+				for _, excEvent := range excEvents {
+					if excEvent.RecurrenceID != nil {
+						key := excEvent.RecurrenceID.Format("20060102T150405Z")
+						exceptionMap[key] = excEvent
+					}
+				}
 			}
 		}
 
@@ -111,22 +68,44 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 			continue
 		}
 
-		// Build responses for each instance
-		for _, event := range expandedEvents {
-			hrefStr := h.buildInstanceHref(event, owner, calURI)
+		// For each expanded instance, create a response with the instance data
+		// but the SAME href (standard CalDAV approach)
+		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
 
-			// Check if there's an explicit exception
+		for _, event := range expandedEvents {
+			// Check if there's an explicit exception for this instance
+			var instanceEvent *ical.Event
 			if event.RecurrenceID != nil {
 				key := event.RecurrenceID.Format("20060102T150405Z")
-				if excObj, exists := exceptionMap[key]; exists {
-					resps = append(resps, buildReportResponse(hrefStr, props, excObj))
-					continue
+				if exc, exists := exceptionMap[key]; exists {
+					instanceEvent = exc
+				} else {
+					instanceEvent = event
 				}
+			} else {
+				instanceEvent = event
 			}
 
-			// Use expanded instance
-			instanceETag := h.generateInstanceETag(o.ETag, event)
-			instanceObj := h.eventToStorageObject(event, instanceETag, o)
+			// Serialize this specific instance
+			instanceData, err := ical.SerializeEvent(instanceEvent)
+			if err != nil {
+				h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to serialize event instance")
+				continue
+			}
+
+			// Create a temporary object for this instance
+			instanceObj := &storage.Object{
+				CalendarID: o.CalendarID,
+				UID:        o.UID,
+				Data:       string(instanceData),
+				Component:  "VEVENT",
+				ETag:       o.ETag, // Same ETag for all instances (same resource)
+				UpdatedAt:  o.UpdatedAt,
+				StartAt:    &instanceEvent.Start,
+				EndAt:      &instanceEvent.End,
+			}
+
+			// Build response with SAME href for all instances
 			resps = append(resps, buildReportResponse(hrefStr, props, instanceObj))
 		}
 	}
@@ -134,79 +113,25 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 	return resps
 }
 
-func (h *Handlers) buildInstanceHref(event *ical.Event, owner, calURI string) string {
-	if event.RecurrenceID != nil {
-		instanceID := event.UID + "-" + event.RecurrenceID.Format("20060102T150405Z")
-		return common.JoinURL(h.basePath, "calendars", owner, calURI, instanceID+".ics")
-	}
-	return common.JoinURL(h.basePath, "calendars", owner, calURI, event.UID+".ics")
-}
-
-func (h *Handlers) eventToStorageObject(event *ical.Event, etag string, originalObj *storage.Object) *storage.Object {
-	data, err := ical.SerializeEvent(event)
+func (h *Handlers) combineEventWithExceptions(master *storage.Object, exceptions []*storage.Object) (string, error) {
+	masterEvents, err := ical.ParseCalendar([]byte(master.Data))
 	if err != nil {
-		h.logger.Warn().Err(err).Str("uid", event.UID).Msg("failed to serialize event")
-		return originalObj
+		return "", err
 	}
 
-	return &storage.Object{
-		CalendarID: originalObj.CalendarID,
-		UID:        event.UID,
-		Data:       string(data),
-		Component:  "VEVENT",
-		ETag:       etag,
-		UpdatedAt:  originalObj.UpdatedAt,
-		StartAt:    &event.Start,
-		EndAt:      &event.End,
-	}
-}
+	allEvents := make([]*ical.Event, 0, len(masterEvents)+len(exceptions))
+	allEvents = append(allEvents, masterEvents...)
 
-func (h *Handlers) handleRecurringInstanceRequest(href string, masterObj *storage.Object, props common.PropRequest) *common.Response {
-	recurrenceID, _ := h.parseInstancePath(href)
-	if recurrenceID == nil {
-		return nil
-	}
-
-	event := h.expandSingleInstance(masterObj, recurrenceID)
-	if event == nil {
-		return nil
-	}
-
-	instanceETag := h.generateInstanceETag(masterObj.ETag, event)
-	instanceObj := h.eventToStorageObject(event, instanceETag, masterObj)
-	resp := buildReportResponse(href, props, instanceObj)
-	return &resp
-}
-
-func (h *Handlers) parseInstancePath(path string) (*time.Time, string) {
-	filename := filepath.Base(path)
-	uid := strings.TrimSuffix(filename, filepath.Ext(filename))
-
-	lastDash := strings.LastIndex(uid, "-")
-	if lastDash == -1 || lastDash == len(uid)-1 {
-		return nil, uid
-	}
-
-	timestampPart := uid[lastDash+1:]
-	if len(timestampPart) == 16 && timestampPart[8] == 'T' && timestampPart[15] == 'Z' {
-		if recTime, err := time.Parse("20060102T150405Z", timestampPart); err == nil {
-			return &recTime, uid[:lastDash]
-		}
-	}
-
-	return nil, uid
-}
-
-func (h *Handlers) findException(exceptions []*storage.Object, recurrenceID *time.Time) *storage.Object {
 	for _, exc := range exceptions {
 		excEvents, err := ical.ParseCalendar([]byte(exc.Data))
-		if err == nil && len(excEvents) > 0 && excEvents[0].RecurrenceID != nil {
-			if excEvents[0].RecurrenceID.Equal(*recurrenceID) {
-				return exc
-			}
+		if err != nil {
+			h.logger.Warn().Err(err).Str("uid", exc.UID).Msg("failed to parse exception")
+			continue
 		}
+		allEvents = append(allEvents, excEvents...)
 	}
-	return nil
+
+	return ical.SerializeMultipleEvents(allEvents)
 }
 
 func (h *Handlers) expandSingleInstance(masterObj *storage.Object, recurrenceID *time.Time) *ical.Event {
@@ -317,16 +242,6 @@ func (h *Handlers) validateETags(r *http.Request, existing *storage.Object, recu
 	return true
 }
 
-func (h *Handlers) determineModificationType(r *http.Request, recurrenceID *time.Time, event *ical.Event) ical.RecurrenceModification {
-	if recurrenceID != nil || (event != nil && event.RecurrenceID != nil) {
-		if r.Header.Get("X-Modify-Future") == "true" || r.URL.Query().Get("this-and-future") == "true" {
-			return ical.ModifyThisFuture
-		}
-		return ical.ModifyThis
-	}
-	return ical.ModifyAll
-}
-
 func (h *Handlers) writeStoredEventResponse(w http.ResponseWriter, ctx context.Context, calendarID, uid string, recurrenceID *time.Time, isNew bool) {
 	storedObj, err := h.store.GetObject(ctx, calendarID, uid)
 	if err != nil {
@@ -350,23 +265,4 @@ func (h *Handlers) writeStoredEventResponse(w http.ResponseWriter, ctx context.C
 	} else {
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-func (h *Handlers) getCompleteRecurringEvent(ctx context.Context, calendarID, uid string) (*storage.Object, []*storage.Object, error) {
-	master, err := h.store.GetMasterEvent(ctx, calendarID, uid)
-	if err != nil {
-		obj, err := h.store.GetObject(ctx, calendarID, uid)
-		if err != nil {
-			return nil, nil, err
-		}
-		return obj, nil, nil
-	}
-
-	exceptions, err := h.store.GetEventExceptions(ctx, calendarID, uid)
-	if err != nil {
-		h.logger.Warn().Err(err).Str("uid", uid).Msg("failed to get exceptions, returning master only")
-		return master, nil, nil
-	}
-
-	return master, exceptions, nil
 }

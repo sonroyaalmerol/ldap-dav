@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -69,6 +70,37 @@ func SerializeEvent(event *Event) ([]byte, error) {
 	}
 
 	return createEventData(event)
+}
+
+func SerializeMultipleEvents(events []*Event) (string, error) {
+	var buf strings.Builder
+	buf.WriteString("BEGIN:VCALENDAR\r\n")
+	buf.WriteString("VERSION:2.0\r\n")
+	buf.WriteString("PRODID:-//ldap-dav//EN\r\n")
+
+	for _, event := range events {
+		eventData, err := SerializeEvent(event)
+		if err != nil {
+			return "", err
+		}
+		// Extract just the VEVENT portion (remove VCALENDAR wrapper)
+		lines := strings.Split(string(eventData), "\r\n")
+		inEvent := false
+		for _, line := range lines {
+			if strings.HasPrefix(line, "BEGIN:VEVENT") {
+				inEvent = true
+			}
+			if inEvent {
+				buf.WriteString(line + "\r\n")
+			}
+			if strings.HasPrefix(line, "END:VEVENT") {
+				inEvent = false
+			}
+		}
+	}
+
+	buf.WriteString("END:VCALENDAR\r\n")
+	return buf.String(), nil
 }
 
 func (re *RecurrenceExpander) ExpandRecurrences(events []*Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {

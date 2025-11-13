@@ -307,22 +307,6 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 	return out, last, nil
 }
 
-func (s *Store) GetMasterEvent(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
-	row := s.pool.QueryRow(ctx, `
-        SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-        FROM calendar_objects 
-        WHERE calendar_id::text = $1 AND uid = $2
-        AND data NOT LIKE '%RECURRENCE-ID%'
-        LIMIT 1
-    `, calendarID, uid)
-
-	var o storage.Object
-	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
-		return nil, err
-	}
-	return &o, nil
-}
-
 func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*storage.Object, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
@@ -415,44 +399,6 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 			updated_at = now()
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
 	return err
-}
-
-func (s *Store) DeleteEventInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if recurrenceID == nil {
-		// Delete all instances including master and exceptions
-		_, err = tx.Exec(ctx, `
-			DELETE FROM calendar_objects 
-			WHERE calendar_id::text = $1 AND uid = $2
-		`, calendarID, uid)
-	} else {
-		// Delete specific exception instance
-		recIDStr := recurrenceID.Format("20060102T150405Z")
-		_, err = tx.Exec(ctx, `
-			DELETE FROM calendar_objects 
-			WHERE calendar_id::text = $1 AND uid = $2
-			AND (data LIKE '%RECURRENCE-ID%' || $3 || '%' OR data LIKE '%RECURRENCE-ID%' || $4 || '%')
-		`, calendarID, uid, recIDStr, recurrenceID.Format("20060102"))
-	}
-
-	if err != nil {
-		return err
-	}
-
-	if err := updateCalendarCTagInTx(ctx, tx, calendarID); err != nil {
-		return err
-	}
-
-	if err := recordChangeInTx(ctx, tx, calendarID, uid, true); err != nil {
-		return err
-	}
-
-	return tx.Commit(ctx)
 }
 
 func updateCalendarCTagInTx(ctx context.Context, tx pgx.Tx, calendarID string) error {
