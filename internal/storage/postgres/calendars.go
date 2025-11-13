@@ -160,27 +160,7 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 	}
 	defer tx.Rollback(ctx)
 
-	if obj.ID == "" {
-		obj.ID = uuid.Must(uuid.NewV7()).String()
-	}
-	// Always generate a new ETag
-	obj.ETag = uuid.Must(uuid.NewV7()).String()
-
-	_, err = tx.Exec(ctx, `
-		insert into calendar_objects (
-			id, calendar_id, uid, etag, data, component, start_at, end_at
-		) values (
-			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
-		)
-		on conflict (calendar_id, uid) do update set
-			etag = excluded.etag,
-			data = excluded.data,
-			component = excluded.component,
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			updated_at = now()
-	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-	if err != nil {
+	if err := s.putObjectInTx(ctx, tx, obj); err != nil {
 		return err
 	}
 
@@ -399,7 +379,28 @@ func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Obje
 }
 
 func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Object) error {
-	_, err := tx.Exec(ctx, `
+	// Check if object already exists to preserve ID
+	var existingID string
+	err := tx.QueryRow(ctx, `
+		SELECT id::text FROM calendar_objects 
+		WHERE calendar_id::text = $1 AND uid = $2
+	`, obj.CalendarID, obj.UID).Scan(&existingID)
+
+	if err == nil {
+		// Object exists, use existing ID
+		obj.ID = existingID
+	} else if err != pgx.ErrNoRows {
+		// Real error, not just "not found"
+		return err
+	} else if obj.ID == "" {
+		// New object, generate ID
+		obj.ID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	// Always generate a new ETag for versioning
+	obj.ETag = uuid.Must(uuid.NewV7()).String()
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO calendar_objects (
 			id, calendar_id, uid, etag, data, component, start_at, end_at
 		) VALUES (

@@ -158,26 +158,7 @@ func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage
 
 func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if obj.ID == "" {
-			obj.ID = uuid.Must(uuid.NewV7()).String()
-		}
-		obj.ETag = uuid.Must(uuid.NewV7()).String()
-
-		_, err := tx.Exec(`
-			INSERT INTO calendar_objects (
-				id, calendar_id, uid, etag, data, component, start_at, end_at
-			) VALUES (
-				?, ?, ?, ?, ?, ?, ?, ?
-			)
-			ON CONFLICT(calendar_id, uid) DO UPDATE SET
-				etag = excluded.etag,
-				data = excluded.data,
-				component = excluded.component,
-				start_at = excluded.start_at,
-				end_at = excluded.end_at,
-				updated_at = datetime('now')
-		`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-		if err != nil {
+		if err := s.putObjectInTx(tx, obj); err != nil {
 			return err
 		}
 
@@ -185,13 +166,51 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 			return err
 		}
 
-		// Record change for sync
 		if err := s.recordChangeInTx(tx, obj.CalendarID, obj.UID, false); err != nil {
 			return err
 		}
 
 		return nil
 	})
+}
+
+func (s *Store) putObjectInTx(tx *sql.Tx, obj *storage.Object) error {
+	// Check if object already exists to preserve ID
+	var existingID string
+	err := tx.QueryRow(`
+		SELECT id FROM calendar_objects 
+		WHERE calendar_id = ? AND uid = ?
+	`, obj.CalendarID, obj.UID).Scan(&existingID)
+
+	if err == nil {
+		// Object exists, use existing ID
+		obj.ID = existingID
+	} else if err != sql.ErrNoRows {
+		// Real error, not just "not found"
+		return err
+	} else if obj.ID == "" {
+		// New object, generate ID
+		obj.ID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	// Always generate a new ETag for versioning
+	obj.ETag = uuid.Must(uuid.NewV7()).String()
+
+	_, err = tx.Exec(`
+		INSERT INTO calendar_objects (
+			id, calendar_id, uid, etag, data, component, start_at, end_at
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?
+		)
+		ON CONFLICT(calendar_id, uid) DO UPDATE SET
+			etag = excluded.etag,
+			data = excluded.data,
+			component = excluded.component,
+			start_at = excluded.start_at,
+			end_at = excluded.end_at,
+			updated_at = datetime('now')
+	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
+	return err
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
@@ -417,7 +436,7 @@ func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Obje
 			}
 		}
 
-		// Update calendar metadata
+		// Update calendar metadata once for all changes
 		if err := s.updateCalendarCTagInTx(tx, master.CalendarID); err != nil {
 			return err
 		}
@@ -428,24 +447,6 @@ func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Obje
 
 		return nil
 	})
-}
-
-func (s *Store) putObjectInTx(tx *sql.Tx, obj *storage.Object) error {
-	_, err := tx.Exec(`
-		INSERT INTO calendar_objects (
-			id, calendar_id, uid, etag, data, component, start_at, end_at
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?
-		)
-		ON CONFLICT(calendar_id, uid) DO UPDATE SET
-			etag = excluded.etag,
-			data = excluded.data,
-			component = excluded.component,
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			updated_at = datetime('now')
-	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-	return err
 }
 
 func (s *Store) DeleteEventInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time) error {
