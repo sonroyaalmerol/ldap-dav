@@ -3,7 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
+	"github.com/google/uuid"
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
 
@@ -13,17 +15,17 @@ import (
 func (s *Store) CreateAddressbook(a storage.Addressbook, ownerGroup string, description string) error {
 	return s.withTx(context.Background(), func(tx *sql.Tx) error {
 		if a.ID == "" {
-			a.ID = randID()
+			a.ID = uuid.Must(uuid.NewV7()).String()
 		}
 		if a.CTag == "" {
-			a.CTag = randID()
+			a.CTag = uuid.Must(uuid.NewV7()).String()
 		}
 
 		_, err := tx.Exec(`
 			INSERT INTO addressbooks (
-				id, owner_user_id, owner_group, uri, display_name, description, ctag
+				id, owner_user_id, owner_group, uri, display_name, description, ctag, sync_seq, sync_token
 			) VALUES (
-				?, ?, ?, ?, ?, ?, ?
+				?, ?, ?, ?, ?, ?, ?, 0, 'seq:0'
 			)
 		`, a.ID, a.OwnerUserID, ownerGroup, a.URI, a.DisplayName, description, a.CTag)
 		return err
@@ -109,11 +111,10 @@ func (s *Store) GetContact(ctx context.Context, addressbookID, uid string) (*sto
 func (s *Store) PutContact(ctx context.Context, c *storage.Contact) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		if c.ID == "" {
-			c.ID = randID()
+			c.ID = uuid.Must(uuid.NewV7()).String()
 		}
-		if c.ETag == "" {
-			c.ETag = randID()
-		}
+		c.ETag = uuid.Must(uuid.NewV7()).String()
+
 		_, err := tx.Exec(`
 			INSERT INTO contacts (
 				id, addressbook_id, uid, etag, data
@@ -125,21 +126,75 @@ func (s *Store) PutContact(ctx context.Context, c *storage.Contact) error {
 				data = excluded.data,
 				updated_at = datetime('now')
 		`, c.ID, c.AddressbookID, c.UID, c.ETag, c.Data)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// Update addressbook CTag and sync info
+		if err := s.updateAddressbookCTagInTx(tx, c.AddressbookID); err != nil {
+			return err
+		}
+
+		// Record change for sync
+		if err := s.recordAddressbookChangeInTx(tx, c.AddressbookID, c.UID, false); err != nil {
+			return err
+		}
+
+		return nil
 	})
 }
 
 func (s *Store) DeleteContact(ctx context.Context, addressbookID, uid string, etag string) error {
-	if etag == "" {
-		_, err := s.db.ExecContext(ctx, `
-			DELETE FROM contacts WHERE addressbook_id = ? AND uid = ?
-		`, addressbookID, uid)
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM contacts WHERE addressbook_id = ? AND uid = ? AND etag = ?
-	`, addressbookID, uid, etag)
-	return err
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var result sql.Result
+		var err error
+
+		if etag == "" {
+			result, err = tx.Exec(`
+				DELETE FROM contacts WHERE addressbook_id = ? AND uid = ?
+			`, addressbookID, uid)
+		} else {
+			result, err = tx.Exec(`
+				DELETE FROM contacts WHERE addressbook_id = ? AND uid = ? AND etag = ?
+			`, addressbookID, uid, etag)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		if rowsAffected == 0 {
+			if etag != "" {
+				// Check if contact exists
+				var exists bool
+				err := tx.QueryRow(`SELECT 1 FROM contacts WHERE addressbook_id = ? AND uid = ?`, addressbookID, uid).Scan(&exists)
+				if err == sql.ErrNoRows {
+					return sql.ErrNoRows
+				}
+				if err == nil && exists {
+					return fmt.Errorf("etag mismatch")
+				}
+			}
+			return sql.ErrNoRows
+		}
+
+		// Update addressbook CTag and sync info
+		if err := s.updateAddressbookCTagInTx(tx, addressbookID); err != nil {
+			return err
+		}
+
+		// Record change for sync
+		if err := s.recordAddressbookChangeInTx(tx, addressbookID, uid, true); err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 func (s *Store) ListContacts(ctx context.Context, addressbookID string) ([]*storage.Contact, error) {
@@ -194,16 +249,6 @@ func (s *Store) ListContactsByFilter(ctx context.Context, addressbookID string, 
 	return out, nil
 }
 
-func (s *Store) NewAddressbookCTag(ctx context.Context, addressbookID string) (string, error) {
-	var ctag string
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		ctag = randID()
-		_, err := tx.Exec(`UPDATE addressbooks SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, addressbookID)
-		return err
-	})
-	return ctag, err
-}
-
 func (s *Store) GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (string, int64, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT sync_token, sync_seq FROM addressbooks WHERE id = ?
@@ -246,30 +291,36 @@ func (s *Store) ListAddressbookChangesSince(ctx context.Context, addressbookID s
 	return out, last, nil
 }
 
-func (s *Store) RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (string, int64, error) {
-	var newToken string
+// Helper function to update CTag within a transaction
+func (s *Store) updateAddressbookCTagInTx(tx *sql.Tx, addressbookID string) error {
+	ctag := uuid.Must(uuid.NewV7()).String()
+	_, err := tx.Exec(`
+		UPDATE addressbooks 
+		SET ctag = ?, updated_at = datetime('now') 
+		WHERE id = ?
+	`, ctag, addressbookID)
+	return err
+}
+
+// Helper function to record change within a transaction
+func (s *Store) recordAddressbookChangeInTx(tx *sql.Tx, addressbookID, uid string, deleted bool) error {
+	// Increment seq and get new value
 	var newSeq int64
-
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		// increment seq and get new values
-		err := tx.QueryRow(`
-			UPDATE addressbooks
-			SET sync_seq = sync_seq + 1,
-				sync_token = 'seq:' || (sync_seq + 1)
-			WHERE id = ?
-			RETURNING sync_seq, sync_token
-		`, addressbookID).Scan(&newSeq, &newToken)
-		if err != nil {
-			return err
-		}
-
-		// insert change row
-		_, err = tx.Exec(`
-			INSERT INTO addressbook_changes(addressbook_id, seq, uid, deleted)
-			VALUES (?, ?, ?, ?)
-		`, addressbookID, newSeq, uid, deleted)
+	err := tx.QueryRow(`
+		UPDATE addressbooks
+		SET sync_seq = sync_seq + 1,
+			sync_token = 'seq:' || (sync_seq + 1)
+		WHERE id = ?
+		RETURNING sync_seq
+	`, addressbookID).Scan(&newSeq)
+	if err != nil {
 		return err
-	})
+	}
 
-	return newToken, newSeq, err
+	// Insert change row
+	_, err = tx.Exec(`
+		INSERT INTO addressbook_changes(addressbook_id, seq, uid, deleted)
+		VALUES (?, ?, ?, ?)
+	`, addressbookID, newSeq, uid, deleted)
+	return err
 }

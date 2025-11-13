@@ -59,7 +59,7 @@ type Addressbook struct {
 
 type Store interface {
 	Close()
-	// Calendars
+
 	CreateCalendar(c Calendar, ownerGroup string, description string) error
 	DeleteCalendar(ownerUserID, calURI string) error
 	GetCalendarByURI(ctx context.Context, uri string) (*Calendar, error)
@@ -67,18 +67,12 @@ type Store interface {
 	ListCalendarsByOwnerUser(ctx context.Context, uid string) ([]*Calendar, error)
 	ListAllCalendars(ctx context.Context) ([]*Calendar, error)
 	UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color string) error
-
-	// Objects
 	GetObject(ctx context.Context, calendarID, uid string) (*Object, error)
 	PutObject(ctx context.Context, obj *Object) error
 	DeleteObject(ctx context.Context, calendarID, uid string, etag string) error
-	ListObjects(ctx context.Context, calendarID string, start *time.Time, end *time.Time) ([]*Object, error)
 	ListObjectsByComponent(ctx context.Context, calendarID string, components []string, start *time.Time, end *time.Time) ([]*Object, error)
-	// Sync tokens
-	NewCTag(ctx context.Context, calendarID string) (string, error)
 	GetSyncInfo(ctx context.Context, calendarID string) (token string, seq int64, err error)
 	ListChangesSince(ctx context.Context, calendarID string, sinceSeq int64, limit int) ([]Change, int64, error)
-	RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (newToken string, newSeq int64, err error)
 
 	CreateAddressbook(a Addressbook, ownerGroup string, description string) error
 	DeleteAddressbook(ownerUserID, abURI string) error
@@ -86,17 +80,11 @@ type Store interface {
 	UpdateAddressbookDisplayName(ctx context.Context, ownerUID, abURI string, displayName *string) error
 	ListAddressbooksByOwnerUser(ctx context.Context, uid string) ([]*Addressbook, error)
 	ListAllAddressbooks(ctx context.Context) ([]*Addressbook, error)
-
 	GetContact(ctx context.Context, addressbookID, uid string) (*Contact, error)
 	PutContact(ctx context.Context, c *Contact) error
 	DeleteContact(ctx context.Context, addressbookID, uid string, etag string) error
-
 	ListContacts(ctx context.Context, addressbookID string) ([]*Contact, error)
-
 	ListContactsByFilter(ctx context.Context, addressbookID string, propNames []string) ([]*Contact, error)
-
-	NewAddressbookCTag(ctx context.Context, addressbookID string) (string, error)
 	GetAddressbookSyncInfo(ctx context.Context, addressbookID string) (token string, seq int64, err error)
 	ListAddressbookChangesSince(ctx context.Context, addressbookID string, sinceSeq int64, limit int) ([]Change, int64, error)
-	RecordAddressbookChange(ctx context.Context, addressbookID, uid string, deleted bool) (newToken string, newSeq int64, err error)
 }

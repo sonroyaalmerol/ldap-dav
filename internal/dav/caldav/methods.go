@@ -233,6 +233,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		Data:       string(ics),
 		Component:  compType,
 	}
+
 	if err := h.store.PutObject(r.Context(), obj); err != nil {
 		h.logger.Error().Err(err).
 			Str("calendarID", calendarID).
@@ -240,13 +241,6 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			Msg("PutObject failed")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
-	}
-	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, false)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("calendarID", calendarID).
-			Str("uid", uid).
-			Msg("RecordChange failed")
 	}
 
 	w.Header().Set("ETag", `"`+obj.ETag+`"`)
@@ -348,6 +342,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
+
 	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
 		h.logger.Error().Err(err).
 			Str("calendarID", calendarID).
@@ -356,13 +351,7 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	_, _, err = h.store.RecordChange(r.Context(), calendarID, uid, true)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("calendarID", calendarID).
-			Str("uid", uid).
-			Msg("RecordChange failed for DELETE")
-	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sonroyaalmerol/ldap-dav/internal/acl"
 	"github.com/sonroyaalmerol/ldap-dav/internal/dav/common"
 	"github.com/sonroyaalmerol/ldap-dav/internal/directory"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
@@ -66,6 +65,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	_ = homeResp.EncodeProp(http.StatusOK, common.Owner{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
 	_ = homeResp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
 
+	// ACL properties for home
 	_ = homeResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 	_ = homeResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
 		Privilege: []common.Privilege{{All: &struct{}{}}},
@@ -75,6 +75,7 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 	resps = append(resps, homeResp)
 
 	if depth == "1" {
+		// Owned calendars
 		for _, cc := range owned {
 			hrefStr := common.CalendarPath(c.basePath, owner, cc.URI)
 			resp := common.Response{Hrefs: []common.Href{{Value: hrefStr}}}
@@ -99,33 +100,32 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 				Text    string   `xml:",chardata"`
 			}{Text: cc.CTag})
 
+			// ACL properties for owned calendar
+			_ = resp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 			_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
 				Privilege: []common.Privilege{{All: &struct{}{}}},
 			})
-
 			_ = resp.EncodeProp(http.StatusOK, c.buildOwnerACL(owner))
+
 			resps = append(resps, resp)
 		}
 
+		// Shared folder
 		sharedBase := common.CalendarSharedRoot(c.basePath, owner)
 		sharedResp := common.Response{Hrefs: []common.Href{{Value: sharedBase}}}
 		_ = sharedResp.EncodeProp(http.StatusOK, common.ResourceType{Collection: &struct{}{}})
 		_ = sharedResp.EncodeProp(http.StatusOK, common.DisplayName{Name: "Shared"})
 		_ = sharedResp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, owner)}})
 
-		sharedEffectivePrivileges := acl.Effective{
-			Read:                        true,
-			ReadCurrentUserPrivilegeSet: true,
-		}
-
-		if sharedEffectivePrivileges.CanReadCurrentUserPrivilegeSet() {
-			_ = sharedResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
-				Privilege: []common.Privilege{{Read: &struct{}{}}},
-			})
-		}
+		// ACL properties for shared folder (read-only)
+		_ = sharedResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
+		_ = sharedResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+			Privilege: []common.Privilege{{Read: &struct{}{}}},
+		})
 
 		resps = append(resps, sharedResp)
 
+		// Shared calendars
 		all, err := c.handlers.store.ListAllCalendars(r.Context())
 		if err != nil {
 			c.handlers.logger.Error().Err(err).Msg("failed to list all calendars in PROPFIND home")
@@ -158,15 +158,19 @@ func (c *CalDAVResourceHandler) PropfindHome(w http.ResponseWriter, r *http.Requ
 						Text    string   `xml:",chardata"`
 					}{Text: cc.CTag})
 
-					if eff.CanReadCurrentUserPrivilegeSet() {
-						privs := c.effectiveToPrivileges(eff)
-						_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: privs})
-					}
+					// ACL properties for shared calendar
+					_ = resp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 
+					// Always return current-user-privilege-set
+					privs := c.effectiveToPrivileges(eff)
+					_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: privs})
+
+					// Only return ACL if user can read it
 					if eff.CanReadACL() {
 						acl := c.buildSharedACL(cc.OwnerUserID, owner, eff)
 						_ = resp.EncodeProp(http.StatusOK, acl)
 					}
+
 					resps = append(resps, resp)
 				}
 			}
@@ -224,6 +228,8 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		pr := common.MustPrincipal(r.Context())
 		_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrincipal{Href: &common.Href{Value: common.PrincipalURL(c.basePath, pr.UserID)}})
 
+		// ACL properties for shared collection
+		_ = resp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 		_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
 			Privilege: []common.Privilege{{Read: &struct{}{}}},
 		})
@@ -279,23 +285,37 @@ func (c *CalDAVResourceHandler) PropfindCollection(w http.ResponseWriter, r *htt
 		_ = propResp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(cal.UpdatedAt.UTC())})
 	}
 
+	// ACL properties - always return supported-privilege-set
 	_ = propResp.EncodeProp(http.StatusOK, c.buildSupportedPrivilegeSet())
 
 	if isSharedMount && trueOwner != "" && pr.UserID != trueOwner {
+		// Shared calendar - get effective permissions
 		if eff, err := c.handlers.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, collection); err == nil {
-			if eff.CanReadCurrentUserPrivilegeSet() {
-				currentUserPrivs := c.effectiveToPrivileges(eff)
-				_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: currentUserPrivs})
-			}
+			// Always return current-user-privilege-set
+			currentUserPrivs := c.effectiveToPrivileges(eff)
+			_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: currentUserPrivs})
 
+			// Only return ACL if user can read it
 			if eff.CanReadACL() {
 				acl := c.buildCollectionACL(trueOwner, pr.UserID, isSharedMount, eff)
 				_ = propResp.EncodeProp(http.StatusOK, acl)
 			}
+		} else {
+			// Error case: still return current-user-privilege-set with read-only access
+			c.handlers.logger.Error().Err(err).
+				Str("user", pr.UserID).
+				Str("calendar", collection).
+				Msg("Failed to get effective permissions in PROPFIND collection")
+			_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+				Privilege: []common.Privilege{{Read: &struct{}{}}},
+			})
 		}
 	} else {
-		acl := c.buildOwnerACL(pr.UserID)
-		_ = propResp.EncodeProp(http.StatusOK, acl)
+		// Owner's calendar - full privileges
+		_ = propResp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+			Privilege: []common.Privilege{{All: &struct{}{}}},
+		})
+		_ = propResp.EncodeProp(http.StatusOK, c.buildOwnerACL(pr.UserID))
 	}
 
 	_ = propResp.EncodeProp(http.StatusOK, struct {
@@ -379,8 +399,34 @@ func (c *CalDAVResourceHandler) PropfindObject(w http.ResponseWriter, r *http.Re
 		Hrefs: []common.Href{{Value: hrefStr}},
 	}
 	_ = resp.EncodeProp(http.StatusOK, common.GetContentType{Type: "text/calendar; charset=utf-8"})
+
+	// Add ETag
+	if obj.ETag != "" {
+		_ = resp.EncodeProp(http.StatusOK, common.GetETag{ETag: common.ETag(obj.ETag)})
+	}
+
 	if !obj.UpdatedAt.IsZero() {
 		_ = resp.EncodeProp(http.StatusOK, common.GetLastModified{LastModified: common.TimeText(obj.UpdatedAt.UTC())})
+	}
+
+	// ACL properties for individual objects
+	// Objects inherit ACL from their parent collection
+	if pr.UserID == calOwner {
+		// Owner has full privileges
+		_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{
+			Privilege: []common.Privilege{{All: &struct{}{}}},
+		})
+	} else {
+		// Shared calendar - get effective permissions
+		if eff, err := c.handlers.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, collection); err == nil {
+			privs := c.effectiveToPrivileges(eff)
+			_ = resp.EncodeProp(http.StatusOK, common.CurrentUserPrivilegeSet{Privilege: privs})
+		} else {
+			c.handlers.logger.Debug().Err(err).
+				Str("user", pr.UserID).
+				Str("collection", collection).
+				Msg("Failed to get effective permissions for object PROPFIND")
+		}
 	}
 
 	ms := common.MultiStatus{Responses: []common.Response{resp}}

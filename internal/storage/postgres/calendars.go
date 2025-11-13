@@ -2,14 +2,14 @@ package postgres
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 )
 
@@ -31,7 +31,7 @@ func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, descriptio
 	displayName := c.DisplayName
 	color := c.Color
 	if color == "" {
-		color = "#3174ad" // Default blue color
+		color = "#3174ad"
 	}
 	ctag := c.CTag
 	if ctag == "" {
@@ -154,13 +154,19 @@ func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage
 }
 
 func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	if obj.ID == "" {
-		obj.ID = randID()
+		obj.ID = uuid.Must(uuid.NewV7()).String()
 	}
-	if obj.ETag == "" {
-		obj.ETag = randID()
-	}
-	_, err := s.pool.Exec(ctx, `
+	// Always generate a new ETag
+	obj.ETag = uuid.Must(uuid.NewV7()).String()
+
+	_, err = tx.Exec(ctx, `
 		insert into calendar_objects (
 			id, calendar_id, uid, etag, data, component, start_at, end_at
 		) values (
@@ -174,67 +180,66 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 			end_at = excluded.end_at,
 			updated_at = now()
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if err := updateCalendarCTagInTx(ctx, tx, obj.CalendarID); err != nil {
+		return err
+	}
+
+	if err := recordChangeInTx(ctx, tx, obj.CalendarID, obj.UID, false); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
-	if etag == "" {
-		_, err := s.pool.Exec(ctx, `
-			delete from calendar_objects where calendar_id::text = $1 and uid = $2
-		`, calendarID, uid)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `
-		delete from calendar_objects where calendar_id::text = $1 and uid = $2 and etag = $3
-	`, calendarID, uid, etag)
-	return err
-}
+	defer tx.Rollback(ctx)
 
-func (s *Store) ListObjects(ctx context.Context, calendarID string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
-	q := `
-		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-		from calendar_objects
-		where calendar_id::text = $1`
-	args := []any{calendarID}
-	if start != nil {
-		q += " and (start_at is null or end_at >= $2)"
-		args = append(args, *start)
-		if end != nil {
-			q += " and (end_at is null or start_at <= $3)"
-			args = append(args, *end)
-		}
-	} else if end != nil {
-		q += " and (start_at is null or start_at <= $2)"
-		args = append(args, *end)
+	var cmdTag pgconn.CommandTag
+	if etag == "" {
+		cmdTag, err = tx.Exec(ctx, `
+			delete from calendar_objects where calendar_id::text = $1 and uid = $2
+		`, calendarID, uid)
+	} else {
+		cmdTag, err = tx.Exec(ctx, `
+			delete from calendar_objects where calendar_id::text = $1 and uid = $2 and etag = $3
+		`, calendarID, uid, etag)
 	}
 
-	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
 
-	var out []*storage.Object
-	for rows.Next() {
-		var o storage.Object
-		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
-			return nil, err
+	if cmdTag.RowsAffected() == 0 {
+		if etag != "" {
+			var exists bool
+			err := tx.QueryRow(ctx, `select exists(select 1 from calendar_objects where calendar_id::text = $1 and uid = $2)`, calendarID, uid).Scan(&exists)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("etag mismatch")
+			}
 		}
-		out = append(out, &o)
+		return sql.ErrNoRows
 	}
-	return out, nil
-}
 
-func (s *Store) NewCTag(ctx context.Context, calendarID string) (string, error) {
-	ctag := randID()
-	_, err := s.pool.Exec(ctx, `update calendars set ctag = $1, updated_at = now() where id::text = $2`, ctag, calendarID)
-	return ctag, err
-}
+	if err := updateCalendarCTagInTx(ctx, tx, calendarID); err != nil {
+		return err
+	}
 
-func randID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	if err := recordChangeInTx(ctx, tx, calendarID, uid, true); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, components []string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
@@ -294,30 +299,18 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 		from calendar_changes
 		where calendar_id::text = $1 and seq > $2
 		order by seq asc`
+	args := []any{calendarID, sinceSeq}
 	if limit > 0 {
 		q += " limit $3"
-		rows, err := s.pool.Query(ctx, q, calendarID, sinceSeq, limit)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer rows.Close()
-		var out []storage.Change
-		var last int64 = sinceSeq
-		for rows.Next() {
-			var c storage.Change
-			if err := rows.Scan(&c.Seq, &c.UID, &c.Deleted); err != nil {
-				return nil, 0, err
-			}
-			out = append(out, c)
-			last = c.Seq
-		}
-		return out, last, nil
+		args = append(args, limit)
 	}
-	rows, err := s.pool.Query(ctx, q, calendarID, sinceSeq)
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
+
 	var out []storage.Change
 	var last int64 = sinceSeq
 	for rows.Next() {
@@ -331,43 +324,32 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 	return out, last, nil
 }
 
-func (s *Store) RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (string, int64, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+func updateCalendarCTagInTx(ctx context.Context, tx pgx.Tx, calendarID string) error {
+	ctag := uuid.Must(uuid.NewV7()).String()
+	_, err := tx.Exec(ctx, `
+		update calendars 
+		set ctag = $1, updated_at = now() 
+		where id::text = $2
+	`, ctag, calendarID)
+	return err
+}
 
-	// increment seq and get new values
+func recordChangeInTx(ctx context.Context, tx pgx.Tx, calendarID, uid string, deleted bool) error {
 	var newSeq int64
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		update calendars
 		set sync_seq = sync_seq + 1,
 		    sync_token = 'seq:' || (sync_seq + 1)
 		where id::text = $1
-		returning sync_seq, sync_token
-	`, calendarID).Scan(&newSeq, new(string)) // temporary placeholder
+		returning sync_seq
+	`, calendarID).Scan(&newSeq)
 	if err != nil {
-		return "", 0, err
+		return err
 	}
 
-	var newToken string
-	err = tx.QueryRow(ctx, `select sync_token from calendars where id::text = $1`, calendarID).Scan(&newToken)
-	if err != nil {
-		return "", 0, err
-	}
-
-	// insert change row
 	_, err = tx.Exec(ctx, `
 		insert into calendar_changes(calendar_id, seq, uid, deleted)
 		values ($1::uuid, $2, $3, $4)
 	`, calendarID, newSeq, uid, deleted)
-	if err != nil {
-		return "", 0, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return "", 0, err
-	}
-	return newToken, newSeq, nil
+	return err
 }

@@ -273,13 +273,6 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	_, _, err = h.store.RecordAddressbookChange(r.Context(), addressbookID, uid, false)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("addressbookID", addressbookID).
-			Str("uid", uid).
-			Msg("RecordAddressbookChange failed")
-	}
 
 	w.Header().Set("ETag", `"`+contact.ETag+`"`)
 	if existing == nil {
@@ -395,13 +388,6 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			Msg("failed to delete contact")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
-	}
-	_, _, err = h.store.RecordAddressbookChange(r.Context(), addressbookID, uid, true)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("addressbookID", addressbookID).
-			Str("uid", uid).
-			Msg("RecordAddressbookChange failed for DELETE")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

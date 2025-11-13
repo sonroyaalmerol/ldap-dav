@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -161,11 +159,10 @@ func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage
 func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		if obj.ID == "" {
-			obj.ID = randID()
+			obj.ID = uuid.Must(uuid.NewV7()).String()
 		}
-		if obj.ETag == "" {
-			obj.ETag = randID()
-		}
+		obj.ETag = uuid.Must(uuid.NewV7()).String()
+
 		_, err := tx.Exec(`
 			INSERT INTO calendar_objects (
 				id, calendar_id, uid, etag, data, component, start_at, end_at
@@ -180,72 +177,101 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 				end_at = excluded.end_at,
 				updated_at = datetime('now')
 		`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-		return err
+		if err != nil {
+			return err
+		}
+
+		if err := s.updateCalendarCTagInTx(tx, obj.CalendarID); err != nil {
+			return err
+		}
+
+		// Record change for sync
+		if err := s.recordChangeInTx(tx, obj.CalendarID, obj.UID, false); err != nil {
+			return err
+		}
+
+		return nil
 	})
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
-	if etag == "" {
-		_, err := s.db.ExecContext(ctx, `
-			DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ?
-		`, calendarID, uid)
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ? AND etag = ?
-	`, calendarID, uid, etag)
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var result sql.Result
+		var err error
+
+		if etag == "" {
+			result, err = tx.Exec(`
+				DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ?
+			`, calendarID, uid)
+		} else {
+			result, err = tx.Exec(`
+				DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ? AND etag = ?
+			`, calendarID, uid, etag)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		if rowsAffected == 0 {
+			if etag != "" {
+				var exists bool
+				err := tx.QueryRow(`SELECT 1 FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid).Scan(&exists)
+				if err == sql.ErrNoRows {
+					return sql.ErrNoRows
+				}
+				if err == nil && exists {
+					return fmt.Errorf("etag mismatch")
+				}
+			}
+			return sql.ErrNoRows
+		}
+
+		if err := s.updateCalendarCTagInTx(tx, calendarID); err != nil {
+			return err
+		}
+
+		if err := s.recordChangeInTx(tx, calendarID, uid, true); err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+func (s *Store) updateCalendarCTagInTx(tx *sql.Tx, calendarID string) error {
+	ctag := uuid.Must(uuid.NewV7()).String()
+	_, err := tx.Exec(`
+		UPDATE calendars 
+		SET ctag = ?, updated_at = datetime('now') 
+		WHERE id = ?
+	`, ctag, calendarID)
 	return err
 }
 
-func (s *Store) ListObjects(ctx context.Context, calendarID string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
-	q := `
-		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
-		FROM calendar_objects
-		WHERE calendar_id = ?`
-	args := []interface{}{calendarID}
-	if start != nil {
-		q += " AND (start_at IS NULL OR end_at >= ?)"
-		args = append(args, *start)
-		if end != nil {
-			q += " AND (end_at IS NULL OR start_at <= ?)"
-			args = append(args, *end)
-		}
-	} else if end != nil {
-		q += " AND (start_at IS NULL OR start_at <= ?)"
-		args = append(args, *end)
-	}
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
+func (s *Store) recordChangeInTx(tx *sql.Tx, calendarID, uid string, deleted bool) error {
+	var newSeq int64
+	err := tx.QueryRow(`
+		UPDATE calendars
+		SET sync_seq = sync_seq + 1,
+			sync_token = 'seq:' || (sync_seq + 1)
+		WHERE id = ?
+		RETURNING sync_seq
+	`, calendarID).Scan(&newSeq)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*storage.Object
-	for rows.Next() {
-		var o storage.Object
-		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, &o)
-	}
-	return out, nil
-}
-
-func (s *Store) NewCTag(ctx context.Context, calendarID string) (string, error) {
-	var ctag string
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		ctag = randID()
-		_, err := tx.Exec(`UPDATE calendars SET ctag = ?, updated_at = datetime('now') WHERE id = ?`, ctag, calendarID)
 		return err
-	})
-	return ctag, err
-}
+	}
 
-func randID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	_, err = tx.Exec(`
+		INSERT INTO calendar_changes(calendar_id, seq, uid, deleted)
+		VALUES (?, ?, ?, ?)
+	`, calendarID, newSeq, uid, deleted)
+	return err
 }
 
 func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, components []string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
@@ -334,32 +360,4 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 		last = c.Seq
 	}
 	return out, last, nil
-}
-
-func (s *Store) RecordChange(ctx context.Context, calendarID, uid string, deleted bool) (string, int64, error) {
-	var newToken string
-	var newSeq int64
-
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		// increment seq and get new values
-		err := tx.QueryRow(`
-			UPDATE calendars
-			SET sync_seq = sync_seq + 1,
-				sync_token = 'seq:' || (sync_seq + 1)
-			WHERE id = ?
-			RETURNING sync_seq, sync_token
-		`, calendarID).Scan(&newSeq, &newToken)
-		if err != nil {
-			return err
-		}
-
-		// insert change row
-		_, err = tx.Exec(`
-			INSERT INTO calendar_changes(calendar_id, seq, uid, deleted)
-			VALUES (?, ?, ?, ?)
-		`, calendarID, newSeq, uid, deleted)
-		return err
-	})
-
-	return newToken, newSeq, err
 }
