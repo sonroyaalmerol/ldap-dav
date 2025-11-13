@@ -387,7 +387,7 @@ func (s *Store) GetMasterEvent(ctx context.Context, calendarID, uid string) (*st
 		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
 		FROM calendar_objects 
 		WHERE calendar_id = ? AND uid = ?
-		AND (data LIKE '%RRULE%' OR data LIKE '%RDATE%')
+		AND data NOT LIKE '%RECURRENCE-ID%'
 		LIMIT 1
 	`, calendarID, uid)
 

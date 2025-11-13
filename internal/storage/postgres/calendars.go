@@ -309,12 +309,12 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 
 func (s *Store) GetMasterEvent(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
-		FROM calendar_objects 
-		WHERE calendar_id::text = $1 AND uid = $2
-		AND (data LIKE '%RRULE%' OR data LIKE '%RDATE%')
-		LIMIT 1
-	`, calendarID, uid)
+        SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+        FROM calendar_objects 
+        WHERE calendar_id::text = $1 AND uid = $2
+        AND data NOT LIKE '%RECURRENCE-ID%'
+        LIMIT 1
+    `, calendarID, uid)
 
 	var o storage.Object
 	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
