@@ -62,7 +62,7 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 	var resps []common.Response
 
 	if start != nil && end != nil && common.ContainsComponent(comps, "VEVENT") {
-		resps = h.buildExpandedEventResponses(objs, *start, *end, props, owner, calURI)
+		resps = h.buildExpandedEventResponses(r.Context(), objs, *start, *end, props, owner, calURI)
 	} else {
 		for _, o := range objs {
 			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
@@ -84,10 +84,48 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 		if owner == "" || len(rest) == 0 {
 			continue
 		}
+
+		if h.isRecurringInstanceRequest(hrefStr) {
+			baseUID := h.extractBaseUIDFromHref(hrefStr)
+
+			calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
+			if err != nil {
+				h.logger.Debug().Err(err).
+					Str("owner", owner).
+					Str("calendar", calURI).
+					Msg("failed to resolve calendar in multiget")
+				continue
+			}
+
+			pr := common.MustPrincipal(r.Context())
+			okRead, err := h.aclCheckRead(r.Context(), pr, calURI, calOwner)
+			if err != nil || !okRead {
+				h.logger.Debug().Err(err).
+					Bool("can_read", okRead).
+					Str("user", pr.UserID).
+					Str("calendar", calURI).
+					Msg("ACL check failed in multiget")
+				continue
+			}
+
+			masterObj, err := h.store.GetObject(r.Context(), calendarID, baseUID)
+			if err != nil {
+				h.logger.Debug().Err(err).
+					Str("calendarID", calendarID).
+					Str("uid", baseUID).
+					Msg("failed to get master object for recurring instance")
+				continue
+			}
+
+			instanceResp := h.handleRecurringInstanceRequest(hrefStr, masterObj, props)
+			if instanceResp != nil {
+				resps = append(resps, *instanceResp)
+			}
+			continue
+		}
+
 		filename := rest[len(rest)-1]
 		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
-
-		uid = h.extractBaseUID(uid)
 
 		calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 		if err != nil {
@@ -97,6 +135,7 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 				Msg("failed to resolve calendar in multiget")
 			continue
 		}
+
 		pr := common.MustPrincipal(r.Context())
 		okRead, err := h.aclCheckRead(r.Context(), pr, calURI, calOwner)
 		if err != nil || !okRead {
@@ -107,6 +146,7 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 				Msg("ACL check failed in multiget")
 			continue
 		}
+
 		o, err := h.store.GetObject(r.Context(), calendarID, uid)
 		if err != nil {
 			h.logger.Debug().Err(err).
@@ -116,16 +156,9 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 			continue
 		}
 
-		if h.isRecurringInstanceRequest(hrefStr) {
-			instanceResp := h.handleRecurringInstanceRequest(hrefStr, o, props)
-			if instanceResp != nil {
-				resps = append(resps, *instanceResp)
-			}
-			continue
-		}
-
 		resps = append(resps, buildReportResponse(hrefStr, props, o))
 	}
+
 	ms := common.MultiStatus{Responses: resps}
 	if err := common.ServeMultiStatus(w, &ms); err != nil {
 		h.logger.Error().Err(err).Msg("failed to serve MultiStatus for calendar-multiget")
@@ -325,7 +358,6 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 
 func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Time) []ical.Interval {
 	var busy []ical.Interval
-	expander := ical.NewRecurrenceExpander(time.UTC)
 
 	for _, o := range objs {
 		if o.Component != "VEVENT" {
@@ -343,20 +375,39 @@ func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Ti
 			continue
 		}
 
-		expandedEvents, err := expander.ExpandRecurrences(events, start, end)
-		if err != nil {
-			h.logger.Debug().Err(err).
-				Str("uid", o.UID).
-				Msg("failed to expand recurrences, using fallback interval if available")
-			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
-				busy = append(busy, *interval)
+		// Check if any event is recurring
+		hasRecurrence := false
+		for _, event := range events {
+			if event.IsRecurring {
+				hasRecurrence = true
+				break
 			}
-			continue
 		}
 
-		for _, event := range expandedEvents {
-			if interval := h.eventToInterval(event, start, end); interval != nil {
-				busy = append(busy, *interval)
+		if hasRecurrence {
+			// Expand recurring events
+			expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+			if err != nil {
+				h.logger.Debug().Err(err).
+					Str("uid", o.UID).
+					Msg("failed to expand recurrences, using fallback interval if available")
+				if interval := h.extractFallbackInterval(o, start, end); interval != nil {
+					busy = append(busy, *interval)
+				}
+				continue
+			}
+
+			for _, event := range expandedEvents {
+				if interval := h.eventToInterval(event, start, end); interval != nil {
+					busy = append(busy, *interval)
+				}
+			}
+		} else {
+			// Non-recurring events - use directly
+			for _, event := range events {
+				if interval := h.eventToInterval(event, start, end); interval != nil {
+					busy = append(busy, *interval)
+				}
 			}
 		}
 	}

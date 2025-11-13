@@ -3,241 +3,410 @@ package ical
 import (
 	"bytes"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/emersion/go-ical"
-	"github.com/teambition/rrule-go"
+	"github.com/google/uuid"
 )
 
-type Event struct {
-	UID          string
-	Summary      string
-	Description  string
-	Start        time.Time
-	End          time.Time
-	Duration     time.Duration
-	IsAllDay     bool
-	IsRecurring  bool
-	RRule        string
-	RDates       []time.Time
-	ExDates      []time.Time
-	RecurrenceID *time.Time
-	RawData      []byte
+// EventOperation represents the type of operation being performed
+type EventOperation int
+
+const (
+	OpCreate EventOperation = iota
+	OpUpdate
+	OpDelete
+)
+
+// RecurrenceModification represents how a recurring event is being modified
+type RecurrenceModification int
+
+const (
+	ModifyAll        RecurrenceModification = iota // Modify the master event
+	ModifyThis                                     // Modify only this instance
+	ModifyThisFuture                               // Modify this and future instances
+)
+
+// EventPutRequest represents a request to create or update an event
+type EventPutRequest struct {
+	Event                *Event
+	ModificationType     RecurrenceModification
+	OriginalRecurrenceID *time.Time // For modifying specific instances
+	PreserveExceptions   bool       // Whether to preserve existing exceptions
 }
 
-type RecurrenceExpander struct {
+// EventDeleteRequest represents a request to delete an event
+type EventDeleteRequest struct {
+	UID              string
+	ModificationType RecurrenceModification
+	RecurrenceID     *time.Time // For deleting specific instances
+}
+
+// RecurrenceManager handles complex recurring event operations
+type RecurrenceManager struct {
 	timeZone *time.Location
 }
 
-func NewRecurrenceExpander(tz *time.Location) *RecurrenceExpander {
+func NewRecurrenceManager(tz *time.Location) *RecurrenceManager {
 	if tz == nil {
 		tz = time.UTC
 	}
-	return &RecurrenceExpander{timeZone: tz}
+	return &RecurrenceManager{timeZone: tz}
 }
 
-func ParseCalendar(data []byte) ([]*Event, error) {
-	cal, err := ical.NewDecoder(bytes.NewReader(data)).Decode()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse calendar: %w", err)
+// PrepareEventPut prepares an event for storage, handling recurrence logic
+func (rm *RecurrenceManager) PrepareEventPut(req *EventPutRequest) ([]*Event, error) {
+	event := req.Event
+
+	// Ensure UID exists
+	if event.UID == "" {
+		event.UID = uuid.New().String()
 	}
 
-	var events []*Event
-
-	for _, comp := range cal.Children {
-		if comp.Name != ical.CompEvent {
-			continue
-		}
-
-		event, err := parseEvent(comp, data)
+	// Non-recurring event - simple case
+	if !event.IsRecurring && req.ModificationType == ModifyAll {
+		normalized, err := rm.normalizeEvent(event)
 		if err != nil {
-			continue // Skip malformed events
+			return nil, fmt.Errorf("failed to normalize event: %w", err)
 		}
-		events = append(events, event)
+		return []*Event{normalized}, nil
 	}
 
-	return events, nil
+	// Handle recurring event modifications
+	switch req.ModificationType {
+	case ModifyAll:
+		return rm.prepareModifyAll(event, req.PreserveExceptions)
+
+	case ModifyThis:
+		return rm.prepareModifyThis(event, req.OriginalRecurrenceID)
+
+	case ModifyThisFuture:
+		return rm.prepareModifyThisFuture(event, req.OriginalRecurrenceID)
+
+	default:
+		return nil, fmt.Errorf("unsupported modification type")
+	}
 }
 
-func SerializeEvent(event *Event) ([]byte, error) {
+// PrepareEventDelete prepares deletion operations for events
+func (rm *RecurrenceManager) PrepareEventDelete(req *EventDeleteRequest, masterEvent *Event) (*Event, error) {
+	switch req.ModificationType {
+	case ModifyAll:
+		// Delete entire series - return nil to indicate full deletion
+		return nil, nil
+
+	case ModifyThis:
+		// Add EXDATE to master event
+		return rm.prepareDeleteThis(masterEvent, req.RecurrenceID)
+
+	case ModifyThisFuture:
+		// Truncate the series
+		return rm.prepareDeleteThisFuture(masterEvent, req.RecurrenceID)
+
+	default:
+		return nil, fmt.Errorf("unsupported modification type")
+	}
+}
+
+// normalizeEvent ensures the event has proper structure
+func (rm *RecurrenceManager) normalizeEvent(event *Event) (*Event, error) {
+	// If we have raw data, parse and reconstruct
 	if event.RawData != nil {
-		if event.RecurrenceID != nil {
-			return modifyEventInstance(event.RawData, event)
+		cal, err := ical.NewDecoder(bytes.NewReader(event.RawData)).Decode()
+		if err != nil {
+			return nil, err
 		}
-		return event.RawData, nil
-	}
 
-	return createEventData(event)
-}
-
-func (re *RecurrenceExpander) ExpandRecurrences(events []*Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {
-	var expandedEvents []*Event
-
-	for _, event := range events {
-		if !event.IsRecurring {
-			if re.eventOverlapsRange(event, rangeStart, rangeEnd) {
-				expandedEvents = append(expandedEvents, event)
+		// Find the event component
+		var eventComp *ical.Component
+		for _, comp := range cal.Children {
+			if comp.Name == ical.CompEvent {
+				eventComp = comp
+				break
 			}
-			continue
 		}
 
-		instances, err := re.expandEvent(event, rangeStart, rangeEnd)
-		if err != nil {
-			continue // Skip events that fail to expand
+		if eventComp == nil {
+			return nil, fmt.Errorf("no VEVENT found")
 		}
-		expandedEvents = append(expandedEvents, instances...)
-	}
 
-	return expandedEvents, nil
-}
+		// Update DTSTAMP
+		now := time.Now().UTC()
+		eventComp.Props.Set(&ical.Prop{
+			Name:  ical.PropDateTimeStamp,
+			Value: now.Format("20060102T150405Z"),
+		})
 
-func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
-	event := &Event{}
-
-	if uid := comp.Props.Get(ical.PropUID); uid != nil {
-		event.UID = uid.Value
-	} else {
-		return nil, fmt.Errorf("missing UID")
-	}
-
-	if summary := comp.Props.Get(ical.PropSummary); summary != nil {
-		event.Summary = summary.Value
-	}
-
-	if desc := comp.Props.Get(ical.PropDescription); desc != nil {
-		event.Description = desc.Value
-	}
-
-	dtstart := comp.Props.Get(ical.PropDateTimeStart)
-	if dtstart == nil {
-		return nil, fmt.Errorf("missing DTSTART")
-	}
-
-	start, isAllDay, err := parseDateTime(dtstart.Value)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DTSTART: %w", err)
-	}
-	event.Start = start
-	event.IsAllDay = isAllDay
-
-	if dtend := comp.Props.Get(ical.PropDateTimeEnd); dtend != nil {
-		end, _, err := parseDateTime(dtend.Value)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DTEND: %w", err)
+		// Re-serialize
+		var buf bytes.Buffer
+		enc := ical.NewEncoder(&buf)
+		if err := enc.Encode(cal); err != nil {
+			return nil, err
 		}
-		event.End = end
-		event.Duration = end.Sub(start)
-	} else if duration := comp.Props.Get(ical.PropDuration); duration != nil {
-		dur, err := parseDuration(duration.Value)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DURATION: %w", err)
-		}
-		event.Duration = dur
-		event.End = start.Add(dur)
-	} else {
-		// Default duration
-		if isAllDay {
-			event.Duration = 24 * time.Hour
-		} else {
-			event.Duration = 0
-		}
-		event.End = start.Add(event.Duration)
-	}
 
-	if rrule := comp.Props.Get(ical.PropRecurrenceRule); rrule != nil {
-		event.RRule = rrule.Value
-		event.IsRecurring = true
+		event.RawData = buf.Bytes()
 	}
-
-	rdateProps := comp.Props.Values(ical.PropRecurrenceDates)
-	for _, rdateProp := range rdateProps {
-		dates, err := parseMultipleDates(rdateProp.Value)
-		if err != nil {
-			continue
-		}
-		event.RDates = append(event.RDates, dates...)
-	}
-	if len(event.RDates) > 0 {
-		event.IsRecurring = true
-	}
-
-	exdateProps := comp.Props.Values(ical.PropExceptionDates)
-	for _, exdateProp := range exdateProps {
-		dates, err := parseMultipleDates(exdateProp.Value)
-		if err != nil {
-			continue
-		}
-		event.ExDates = append(event.ExDates, dates...)
-	}
-
-	if recID := comp.Props.Get(ical.PropRecurrenceID); recID != nil {
-		recTime, _, err := parseDateTime(recID.Value)
-		if err == nil {
-			event.RecurrenceID = &recTime
-		}
-	}
-
-	event.RawData = originalData
 
 	return event, nil
 }
 
-func (re *RecurrenceExpander) expandEvent(event *Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {
-	var instances []time.Time
-
-	if event.RRule != "" {
-		rruleStr := "DTSTART:" + event.Start.Format("20060102T150405Z") + "\nRRULE:" + event.RRule
-		rule, err := rrule.StrToRRule(rruleStr)
+// prepareModifyAll handles modifying all instances of a recurring event
+func (rm *RecurrenceManager) prepareModifyAll(event *Event, preserveExceptions bool) ([]*Event, error) {
+	if !preserveExceptions {
+		// Simple case - just update the master event
+		normalized, err := rm.normalizeEvent(event)
 		if err != nil {
-			return nil, fmt.Errorf("invalid RRULE: %w", err)
+			return nil, err
 		}
-
-		extendedEnd := rangeEnd.Add(event.Duration)
-		occurrences := rule.Between(rangeStart.Add(-event.Duration), extendedEnd, true)
-		instances = append(instances, occurrences...)
+		return []*Event{normalized}, nil
 	}
 
-	instances = append(instances, event.RDates...)
+	// If preserving exceptions, we need to keep EXDATE entries
+	// This requires parsing the original data if available
+	normalized, err := rm.normalizeEvent(event)
+	if err != nil {
+		return nil, err
+	}
 
-	instances = filterExcludedDates(instances, event.ExDates)
+	return []*Event{normalized}, nil
+}
 
-	var filteredInstances []time.Time
-	for _, instance := range instances {
-		eventEnd := instance.Add(event.Duration)
-		if re.timeRangeOverlaps(instance, eventEnd, rangeStart, rangeEnd) {
-			filteredInstances = append(filteredInstances, instance)
+// prepareModifyThis handles modifying a single instance
+func (rm *RecurrenceManager) prepareModifyThis(event *Event, recurrenceID *time.Time) ([]*Event, error) {
+	if recurrenceID == nil {
+		return nil, fmt.Errorf("recurrenceID required for ModifyThis")
+	}
+
+	// Create an exception instance with RECURRENCE-ID
+	exception := &Event{
+		UID:          event.UID,
+		Summary:      event.Summary,
+		Description:  event.Description,
+		Start:        event.Start,
+		End:          event.End,
+		Duration:     event.Duration,
+		IsAllDay:     event.IsAllDay,
+		IsRecurring:  false,
+		RecurrenceID: recurrenceID,
+	}
+
+	// Generate iCal data for the exception
+	data, err := createEventData(exception)
+	if err != nil {
+		return nil, err
+	}
+	exception.RawData = data
+
+	return []*Event{exception}, nil
+}
+
+// prepareModifyThisFuture handles modifying this and future instances
+func (rm *RecurrenceManager) prepareModifyThisFuture(event *Event, splitPoint *time.Time) ([]*Event, error) {
+	if splitPoint == nil {
+		return nil, fmt.Errorf("splitPoint required for ModifyThisFuture")
+	}
+
+	var events []*Event
+
+	// Create a truncated master event (ends before split point)
+	if event.RawData != nil {
+		truncated, err := rm.truncateRecurrence(event, *splitPoint)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, truncated)
+	}
+
+	// Create new master event starting from split point
+	newMaster := &Event{
+		UID:         uuid.New().String(), // New UID for new series
+		Summary:     event.Summary,
+		Description: event.Description,
+		Start:       *splitPoint,
+		End:         splitPoint.Add(event.Duration),
+		Duration:    event.Duration,
+		IsAllDay:    event.IsAllDay,
+		IsRecurring: event.IsRecurring,
+		RRule:       event.RRule,
+	}
+
+	data, err := createEventData(newMaster)
+	if err != nil {
+		return nil, err
+	}
+	newMaster.RawData = data
+
+	events = append(events, newMaster)
+
+	return events, nil
+}
+
+// truncateRecurrence truncates a recurring event to end before a specific date
+func (rm *RecurrenceManager) truncateRecurrence(event *Event, until time.Time) (*Event, error) {
+	cal, err := ical.NewDecoder(bytes.NewReader(event.RawData)).Decode()
+	if err != nil {
+		return nil, err
+	}
+
+	var eventComp *ical.Component
+	for _, comp := range cal.Children {
+		if comp.Name == ical.CompEvent {
+			eventComp = comp
+			break
 		}
 	}
 
-	sort.Slice(filteredInstances, func(i, j int) bool {
-		return filteredInstances[i].Before(filteredInstances[j])
+	if eventComp == nil {
+		return nil, fmt.Errorf("no VEVENT found")
+	}
+
+	// Modify RRULE to add UNTIL
+	if rruleProp := eventComp.Props.Get(ical.PropRecurrenceRule); rruleProp != nil {
+		rruleValue := rruleProp.Value
+
+		// Remove existing UNTIL or COUNT if present
+		rruleValue = removeRRuleParameter(rruleValue, "UNTIL")
+		rruleValue = removeRRuleParameter(rruleValue, "COUNT")
+
+		// Add new UNTIL
+		untilStr := until.Add(-1 * time.Second).Format("20060102T150405Z")
+		if rruleValue != "" {
+			rruleValue += ";UNTIL=" + untilStr
+		}
+
+		rruleProp.Value = rruleValue
+	}
+
+	// Update DTSTAMP
+	eventComp.Props.Set(&ical.Prop{
+		Name:  ical.PropDateTimeStamp,
+		Value: time.Now().UTC().Format("20060102T150405Z"),
 	})
 
-	var expandedEvents []*Event
-	for i, instanceTime := range filteredInstances {
-		instanceEvent := &Event{
-			UID:          fmt.Sprintf("%s-%d", event.UID, i),
-			Summary:      event.Summary,
-			Description:  event.Description,
-			Start:        instanceTime,
-			End:          instanceTime.Add(event.Duration),
-			Duration:     event.Duration,
-			IsAllDay:     event.IsAllDay,
-			IsRecurring:  false,
-			RecurrenceID: &instanceTime,
-			RawData:      event.RawData,
-		}
-		expandedEvents = append(expandedEvents, instanceEvent)
+	var buf bytes.Buffer
+	enc := ical.NewEncoder(&buf)
+	if err := enc.Encode(cal); err != nil {
+		return nil, err
 	}
 
-	return expandedEvents, nil
+	truncatedEvent := *event
+	truncatedEvent.RawData = buf.Bytes()
+
+	return &truncatedEvent, nil
 }
 
-func (re *RecurrenceExpander) eventOverlapsRange(event *Event, rangeStart, rangeEnd time.Time) bool {
-	return re.timeRangeOverlaps(event.Start, event.End, rangeStart, rangeEnd)
+// prepareDeleteThis adds an EXDATE to the master event
+func (rm *RecurrenceManager) prepareDeleteThis(masterEvent *Event, recurrenceID *time.Time) (*Event, error) {
+	if recurrenceID == nil {
+		return nil, fmt.Errorf("recurrenceID required")
+	}
+
+	cal, err := ical.NewDecoder(bytes.NewReader(masterEvent.RawData)).Decode()
+	if err != nil {
+		return nil, err
+	}
+
+	var eventComp *ical.Component
+	for _, comp := range cal.Children {
+		if comp.Name == ical.CompEvent {
+			eventComp = comp
+			break
+		}
+	}
+
+	if eventComp == nil {
+		return nil, fmt.Errorf("no VEVENT found")
+	}
+
+	// Add EXDATE
+	exdateProp := &ical.Prop{
+		Name: ical.PropExceptionDates,
+	}
+
+	if masterEvent.IsAllDay {
+		exdateProp.Value = recurrenceID.Format("20060102")
+	} else {
+		exdateProp.Value = recurrenceID.Format("20060102T150405Z")
+	}
+
+	// Append to existing EXDATE or create new
+	existingExdates := eventComp.Props.Values(ical.PropExceptionDates)
+	if len(existingExdates) > 0 {
+		lastExdate := eventComp.Props.Get(ical.PropExceptionDates)
+		lastExdate.Value += "," + exdateProp.Value
+	} else {
+		eventComp.Props.Set(exdateProp)
+	}
+
+	// Update DTSTAMP
+	eventComp.Props.Set(&ical.Prop{
+		Name:  ical.PropDateTimeStamp,
+		Value: time.Now().UTC().Format("20060102T150405Z"),
+	})
+
+	var buf bytes.Buffer
+	enc := ical.NewEncoder(&buf)
+	if err := enc.Encode(cal); err != nil {
+		return nil, err
+	}
+
+	modifiedEvent := *masterEvent
+	modifiedEvent.RawData = buf.Bytes()
+
+	return &modifiedEvent, nil
 }
 
-func (re *RecurrenceExpander) timeRangeOverlaps(eventStart, eventEnd, rangeStart, rangeEnd time.Time) bool {
-	return eventStart.Before(rangeEnd) && eventEnd.After(rangeStart)
+// prepareDeleteThisFuture truncates the series at the specified point
+func (rm *RecurrenceManager) prepareDeleteThisFuture(masterEvent *Event, from *time.Time) (*Event, error) {
+	if from == nil {
+		return nil, fmt.Errorf("from date required")
+	}
+
+	return rm.truncateRecurrence(masterEvent, *from)
+}
+
+// Helper function to remove a parameter from RRULE string
+func removeRRuleParameter(rrule, param string) string {
+	// Simple implementation - you may want to make this more robust
+	parts := []string{}
+	for _, part := range splitRRule(rrule) {
+		if !hasPrefix(part, param+"=") {
+			parts = append(parts, part)
+		}
+	}
+	return joinRRule(parts)
+}
+
+func splitRRule(s string) []string {
+	var parts []string
+	current := ""
+	for _, c := range s {
+		if c == ';' {
+			if current != "" {
+				parts = append(parts, current)
+			}
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+func joinRRule(parts []string) string {
+	result := ""
+	for i, part := range parts {
+		if i > 0 {
+			result += ";"
+		}
+		result += part
+	}
+	return result
+}
+
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

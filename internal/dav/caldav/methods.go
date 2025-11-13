@@ -3,6 +3,7 @@ package caldav
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -74,6 +75,12 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check if this is a recurring instance request
+	if h.isRecurringInstanceRequest(r.URL.Path) {
+		h.handleGetRecurringInstance(w, r, calendarID)
+		return
+	}
+
 	obj, err := h.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
 		h.logger.Error().Err(err).
@@ -96,6 +103,123 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Last-Modified", obj.UpdatedAt.UTC().Format(time.RFC1123))
 	}
 	_, _ = io.WriteString(w, obj.Data)
+}
+
+func (h *Handlers) handleGetRecurringInstance(w http.ResponseWriter, r *http.Request, calendarID string) {
+	baseUID := h.extractBaseUIDFromHref(r.URL.Path)
+	recurrenceTime, err := h.parseRecurrenceIDFromHref(r.URL.Path)
+	if err != nil || recurrenceTime == nil {
+		h.logger.Error().Err(err).
+			Str("path", r.URL.Path).
+			Msg("failed to parse recurrence-id from path")
+		http.NotFound(w, r)
+		return
+	}
+
+	// Use the helper to get complete event
+	masterObj, exceptions, err := h.getCompleteRecurringEvent(r.Context(), calendarID, baseUID)
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("calendarID", calendarID).
+			Str("baseUID", baseUID).
+			Msg("failed to get master object for recurring instance")
+		http.NotFound(w, r)
+		return
+	}
+
+	// First, check if there's an explicit exception for this recurrence
+	for _, exc := range exceptions {
+		excEvents, err := ical.ParseCalendar([]byte(exc.Data))
+		if err == nil && len(excEvents) > 0 {
+			if excEvents[0].RecurrenceID != nil && excEvents[0].RecurrenceID.Equal(*recurrenceTime) {
+				// Found explicit exception, return it
+				h.logger.Debug().
+					Str("uid", baseUID).
+					Time("recurrence_id", *recurrenceTime).
+					Msg("returning explicit exception instance")
+
+				inm := common.TrimQuotes(r.Header.Get("If-None-Match"))
+				if inm != "" && inm == exc.ETag {
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+
+				w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+				w.Header().Set("ETag", `"`+exc.ETag+`"`)
+				if !exc.UpdatedAt.IsZero() {
+					w.Header().Set("Last-Modified", exc.UpdatedAt.UTC().Format(time.RFC1123))
+				}
+				_, _ = io.WriteString(w, exc.Data)
+				return
+			}
+		}
+	}
+
+	// No explicit exception, expand from master
+	events, err := ical.ParseCalendar([]byte(masterObj.Data))
+	if err != nil {
+		h.logger.Error().Err(err).Str("uid", baseUID).Msg("failed to parse calendar")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	hasRecurrence := false
+	for _, event := range events {
+		if event.IsRecurring {
+			hasRecurrence = true
+			break
+		}
+	}
+
+	if !hasRecurrence {
+		http.NotFound(w, r)
+		return
+	}
+
+	start := recurrenceTime.Add(-24 * time.Hour)
+	end := recurrenceTime.Add(24 * time.Hour)
+
+	expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to expand recurrences")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var targetEvent *ical.Event
+	for _, event := range expandedEvents {
+		if event.RecurrenceID != nil && event.RecurrenceID.Equal(*recurrenceTime) {
+			targetEvent = event
+			break
+		}
+	}
+
+	if targetEvent == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	instanceETag := h.generateInstanceETag(masterObj.ETag, targetEvent)
+
+	inm := common.TrimQuotes(r.Header.Get("If-None-Match"))
+	if inm != "" && inm == instanceETag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	instanceData, err := ical.SerializeEvent(targetEvent)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to serialize event instance")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	w.Header().Set("ETag", `"`+instanceETag+`"`)
+	if !masterObj.UpdatedAt.IsZero() {
+		w.Header().Set("Last-Modified", masterObj.UpdatedAt.UTC().Format(time.RFC1123))
+	}
+	_, _ = w.Write(instanceData)
 }
 
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +258,20 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	pr := common.MustPrincipal(r.Context())
 
-	existing, _ := h.store.GetObject(r.Context(), calendarID, uid)
+	// Check if this is a recurring instance
+	isRecurringInstance := h.isRecurringInstanceRequest(r.URL.Path)
+	lookupUID := uid
+	var recurrenceID *time.Time
+
+	if isRecurringInstance {
+		lookupUID = h.extractBaseUIDFromHref(r.URL.Path)
+		recID, err := h.parseRecurrenceIDFromHref(r.URL.Path)
+		if err == nil && recID != nil {
+			recurrenceID = recID
+		}
+	}
+
+	existing, _ := h.store.GetObject(r.Context(), calendarID, lookupUID)
 
 	if pr.UserID != calOwner {
 		eff, err := h.aclProv.Effective(r.Context(), &directory.User{UID: pr.UserID, DN: pr.UserDN, DisplayName: pr.Display}, calURI)
@@ -191,13 +328,6 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compType, err := ical.DetectICSComponent(raw)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("unsupported calendar component in PUT")
-		http.Error(w, "unsupported calendar component", http.StatusUnsupportedMediaType)
-		return
-	}
-
 	if fixed, inserted := ical.EnsureDTStamp(raw); inserted {
 		raw = fixed
 	}
@@ -209,41 +339,176 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, err = ical.DetectICSComponent(ics)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("unsupported calendar component in PUT")
+		http.Error(w, "unsupported calendar component", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	events, err := ical.ParseCalendar(ics)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to parse incoming calendar")
+		http.Error(w, "invalid ical", http.StatusBadRequest)
+		return
+	}
+
+	if len(events) == 0 {
+		h.logger.Error().Msg("no events found in calendar")
+		http.Error(w, "no events", http.StatusBadRequest)
+		return
+	}
+
+	incomingEvent := events[0]
+	incomingEvent.UID = lookupUID // Ensure UID matches
+
+	// ETag validation
 	wantNew := r.Header.Get("If-None-Match") == "*"
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 
 	if wantNew && existing != nil {
-		h.logger.Debug().Str("uid", uid).Msg("precondition failed - object exists")
-		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
-		return
-	}
-	if match != "" && existing != nil && existing.ETag != match {
-		h.logger.Debug().
-			Str("uid", uid).
-			Str("expected_etag", match).
-			Str("actual_etag", existing.ETag).
-			Msg("precondition failed - etag mismatch")
+		h.logger.Debug().Str("uid", lookupUID).Msg("precondition failed - object exists")
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
 
-	obj := &storage.Object{
-		CalendarID: calendarID,
-		UID:        uid,
-		Data:       string(ics),
-		Component:  compType,
+	if match != "" && existing != nil {
+		if isRecurringInstance && recurrenceID != nil {
+			// Validate instance ETag
+			existingEvents, err := ical.ParseCalendar([]byte(existing.Data))
+			if err == nil {
+				start := recurrenceID.Add(-24 * time.Hour)
+				end := recurrenceID.Add(24 * time.Hour)
+				expandedEvents, err := h.expander.ExpandRecurrences(existingEvents, start, end)
+				if err == nil {
+					found := false
+					for _, event := range expandedEvents {
+						if event.RecurrenceID != nil && event.RecurrenceID.Equal(*recurrenceID) {
+							instanceETag := h.generateInstanceETag(existing.ETag, event)
+							if instanceETag != match {
+								h.logger.Debug().
+									Str("uid", uid).
+									Str("expected_etag", match).
+									Str("actual_etag", instanceETag).
+									Msg("precondition failed - instance etag mismatch")
+								http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+								return
+							}
+							found = true
+							break
+						}
+					}
+					if !found && match != existing.ETag {
+						h.logger.Debug().
+							Str("uid", lookupUID).
+							Str("expected_etag", match).
+							Msg("precondition failed - instance not found and master etag mismatch")
+						http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+						return
+					}
+				}
+			}
+		} else {
+			// Regular ETag validation
+			if existing.ETag != match {
+				h.logger.Debug().
+					Str("uid", lookupUID).
+					Str("expected_etag", match).
+					Str("actual_etag", existing.ETag).
+					Msg("precondition failed - etag mismatch")
+				http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+				return
+			}
+		}
 	}
 
-	if err := h.store.PutObject(r.Context(), obj); err != nil {
-		h.logger.Error().Err(err).
-			Str("calendarID", calendarID).
-			Str("uid", uid).
-			Msg("PutObject failed")
+	// Determine modification type
+	modType := ical.ModifyAll
+
+	if isRecurringInstance || incomingEvent.RecurrenceID != nil {
+		modType = ical.ModifyThis
+		if recurrenceID == nil {
+			recurrenceID = incomingEvent.RecurrenceID
+		}
+	}
+
+	// Check for "this and future" based on custom header or parameter
+	if r.Header.Get("X-Modify-Future") == "true" || r.URL.Query().Get("this-and-future") == "true" {
+		if recurrenceID != nil {
+			modType = ical.ModifyThisFuture
+		}
+	}
+
+	// If we're modifying a single instance or "this and future" of a recurring event,
+	// we need to check for existing exceptions
+	if existing != nil && (modType == ical.ModifyThis || modType == ical.ModifyThisFuture) {
+		// Check if this is actually a recurring event
+		existingEvents, err := ical.ParseCalendar([]byte(existing.Data))
+		if err == nil && len(existingEvents) > 0 && existingEvents[0].IsRecurring {
+			// Get existing exceptions to preserve them
+			existingExceptions, err := h.store.GetEventExceptions(r.Context(), calendarID, lookupUID)
+			if err != nil {
+				h.logger.Warn().Err(err).
+					Str("uid", lookupUID).
+					Msg("failed to get existing exceptions, continuing without them")
+			} else if len(existingExceptions) > 0 {
+				h.logger.Debug().
+					Str("uid", lookupUID).
+					Int("exception_count", len(existingExceptions)).
+					Msg("found existing exceptions for recurring event")
+				// The exceptions will be preserved when we store
+			}
+		}
+	}
+
+	// Prepare the event for storage
+	req := &ical.EventPutRequest{
+		Event:                incomingEvent,
+		ModificationType:     modType,
+		OriginalRecurrenceID: recurrenceID,
+		PreserveExceptions:   existing != nil,
+	}
+
+	eventsToStore, err := h.recurrenceManager.PrepareEventPut(req)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to prepare event for storage")
+		http.Error(w, fmt.Sprintf("failed to prepare event: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate that we got events to store
+	if len(eventsToStore) == 0 {
+		h.logger.Error().Msg("no events to store after preparation")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Store the events
+	if err := h.storeEvents(r.Context(), calendarID, eventsToStore); err != nil {
+		h.logger.Error().Err(err).Msg("failed to store events")
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("ETag", `"`+obj.ETag+`"`)
+	// Get the stored object to return its ETag
+	storedObj, err := h.store.GetObject(r.Context(), calendarID, lookupUID)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("stored but failed to retrieve object")
+		// Still return success since we stored it
+		if existing == nil {
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+
+	responseETag := storedObj.ETag
+	if isRecurringInstance && recurrenceID != nil {
+		responseETag = h.generateInstanceETag(storedObj.ETag, &ical.Event{RecurrenceID: recurrenceID})
+	}
+
+	w.Header().Set("ETag", `"`+responseETag+`"`)
 	if existing == nil {
 		w.WriteHeader(http.StatusCreated)
 	} else {
@@ -341,15 +606,167 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check if this is a recurring instance
+	isRecurringInstance := h.isRecurringInstanceRequest(r.URL.Path)
+	lookupUID := uid
+	var recurrenceID *time.Time
+
+	if isRecurringInstance {
+		lookupUID = h.extractBaseUIDFromHref(r.URL.Path)
+		recID, err := h.parseRecurrenceIDFromHref(r.URL.Path)
+		if err == nil && recID != nil {
+			recurrenceID = recID
+		}
+	}
+
 	match := common.TrimQuotes(r.Header.Get("If-Match"))
 
-	if err := h.store.DeleteObject(r.Context(), calendarID, uid, match); err != nil {
-		h.logger.Error().Err(err).
-			Str("calendarID", calendarID).
-			Str("uid", uid).
-			Msg("failed to delete object")
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	// Get the existing object
+	existing, err := h.store.GetObject(r.Context(), calendarID, lookupUID)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("object not found")
+		http.NotFound(w, r)
 		return
+	}
+
+	// Validate ETag if provided
+	if match != "" {
+		if isRecurringInstance && recurrenceID != nil {
+			// Validate instance ETag
+			events, err := ical.ParseCalendar([]byte(existing.Data))
+			if err == nil {
+				start := recurrenceID.Add(-24 * time.Hour)
+				end := recurrenceID.Add(24 * time.Hour)
+				expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+				if err == nil {
+					found := false
+					for _, event := range expandedEvents {
+						if event.RecurrenceID != nil && event.RecurrenceID.Equal(*recurrenceID) {
+							instanceETag := h.generateInstanceETag(existing.ETag, event)
+							if instanceETag != match {
+								h.logger.Debug().
+									Str("uid", uid).
+									Str("expected_etag", match).
+									Str("actual_etag", instanceETag).
+									Msg("precondition failed - instance etag mismatch in DELETE")
+								http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+								return
+							}
+							found = true
+							break
+						}
+					}
+					if !found {
+						http.NotFound(w, r)
+						return
+					}
+				}
+			}
+		} else {
+			// Regular ETag validation
+			if existing.ETag != match {
+				h.logger.Debug().
+					Str("uid", lookupUID).
+					Str("expected_etag", match).
+					Str("actual_etag", existing.ETag).
+					Msg("precondition failed - etag mismatch in DELETE")
+				http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+				return
+			}
+		}
+	}
+
+	// Determine modification type
+	modType := ical.ModifyAll
+	if recurrenceID != nil {
+		modType = ical.ModifyThis
+	}
+
+	// Check for "this and future"
+	if r.URL.Query().Get("this-and-future") == "true" || r.Header.Get("X-Modify-Future") == "true" {
+		if recurrenceID != nil {
+			modType = ical.ModifyThisFuture
+		}
+	}
+
+	// Handle the delete based on modification type
+	if modType == ical.ModifyAll && recurrenceID == nil {
+		// Simple delete - remove master AND all exceptions
+
+		// First, try to get and delete all exceptions
+		exceptions, err := h.store.GetEventExceptions(r.Context(), calendarID, lookupUID)
+		if err != nil {
+			h.logger.Warn().Err(err).
+				Str("uid", lookupUID).
+				Msg("failed to get exceptions before delete, will attempt to delete master anyway")
+		}
+
+		// Delete all exceptions first
+		if len(exceptions) > 0 {
+			h.logger.Debug().
+				Str("uid", lookupUID).
+				Int("exception_count", len(exceptions)).
+				Msg("deleting event exceptions before master")
+
+			for _, exc := range exceptions {
+				// Each exception has the same UID but different RECURRENCE-ID
+				if err := h.store.DeleteObject(r.Context(), calendarID, exc.UID, ""); err != nil {
+					h.logger.Warn().Err(err).
+						Str("uid", exc.UID).
+						Msg("failed to delete exception, continuing")
+				}
+			}
+		}
+
+		// Now delete the master event
+		if err := h.store.DeleteEventInstance(r.Context(), calendarID, lookupUID, nil); err != nil {
+			h.logger.Error().Err(err).Msg("failed to delete event")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Complex delete - need to modify master event
+		events, err := ical.ParseCalendar([]byte(existing.Data))
+		if err != nil {
+			h.logger.Error().Err(err).Msg("failed to parse existing event")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if len(events) == 0 {
+			h.logger.Error().Msg("no events in calendar data")
+			http.NotFound(w, r)
+			return
+		}
+
+		deleteReq := &ical.EventDeleteRequest{
+			UID:              lookupUID,
+			ModificationType: modType,
+			RecurrenceID:     recurrenceID,
+		}
+
+		modifiedMaster, err := h.recurrenceManager.PrepareEventDelete(deleteReq, events[0])
+		if err != nil {
+			h.logger.Error().Err(err).Msg("failed to prepare delete")
+			http.Error(w, fmt.Sprintf("failed to prepare delete: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		if modifiedMaster == nil {
+			// Delete entire series
+			if err := h.store.DeleteEventInstance(r.Context(), calendarID, lookupUID, nil); err != nil {
+				h.logger.Error().Err(err).Msg("failed to delete event series")
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Update master with EXDATE or truncated RRULE
+			if err := h.storeEvents(r.Context(), calendarID, []*ical.Event{modifiedMaster}); err != nil {
+				h.logger.Error().Err(err).Msg("failed to update master event")
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -906,4 +1323,87 @@ func (h *Handlers) HandleReport(w http.ResponseWriter, r *http.Request) {
 			Msg("unsupported REPORT type")
 		http.Error(w, "unsupported REPORT", http.StatusBadRequest)
 	}
+}
+
+func (h *Handlers) storeEvents(ctx context.Context, calendarID string, events []*ical.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Separate master and exceptions
+	var master *storage.Object
+	var exceptions []*storage.Object
+
+	for _, event := range events {
+		data, err := ical.SerializeEvent(event)
+		if err != nil {
+			return fmt.Errorf("failed to serialize event: %w", err)
+		}
+
+		// Ensure data has DTSTAMP
+		data, _ = ical.EnsureDTStamp(data)
+
+		// Detect component type from the serialized data
+		component, err := ical.DetectICSComponent(data)
+		if err != nil {
+			h.logger.Warn().Err(err).Msg("failed to detect component type, defaulting to VEVENT")
+			component = "VEVENT"
+		}
+
+		obj := &storage.Object{
+			CalendarID: calendarID,
+			UID:        event.UID,
+			Data:       string(data),
+			Component:  component,
+			StartAt:    &event.Start,
+			EndAt:      &event.End,
+		}
+
+		if event.RecurrenceID != nil {
+			exceptions = append(exceptions, obj)
+		} else {
+			master = obj
+		}
+	}
+
+	// Store using appropriate method
+	if master != nil && len(exceptions) > 0 {
+		return h.store.PutEventWithExceptions(ctx, master, exceptions)
+	} else if master != nil {
+		return h.store.PutObject(ctx, master)
+	} else if len(exceptions) > 0 {
+		// Store exceptions individually
+		for _, exc := range exceptions {
+			if err := h.store.PutObject(ctx, exc); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (h *Handlers) getCompleteRecurringEvent(ctx context.Context, calendarID, uid string) (*storage.Object, []*storage.Object, error) {
+	// Try to get master event first
+	master, err := h.store.GetMasterEvent(ctx, calendarID, uid)
+	if err != nil {
+		// If not found as master, try as regular object
+		obj, err := h.store.GetObject(ctx, calendarID, uid)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Not a recurring event, return as master with no exceptions
+		return obj, nil, nil
+	}
+
+	// Get exceptions
+	exceptions, err := h.store.GetEventExceptions(ctx, calendarID, uid)
+	if err != nil {
+		h.logger.Warn().Err(err).
+			Str("uid", uid).
+			Msg("failed to get exceptions, returning master only")
+		return master, nil, nil
+	}
+
+	return master, exceptions, nil
 }

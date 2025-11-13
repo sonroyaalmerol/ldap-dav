@@ -327,6 +327,133 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 	return out, last, nil
 }
 
+func (s *Store) GetMasterEvent(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+		FROM calendar_objects 
+		WHERE calendar_id::text = $1 AND uid = $2
+		AND (data LIKE '%RRULE%' OR data LIKE '%RDATE%')
+		LIMIT 1
+	`, calendarID, uid)
+
+	var o storage.Object
+	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*storage.Object, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+		FROM calendar_objects
+		WHERE calendar_id::text = $1 AND uid = $2
+		AND data LIKE '%RECURRENCE-ID%'
+		ORDER BY start_at
+	`, calendarID, masterUID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var exceptions []*storage.Object
+	for rows.Next() {
+		var o storage.Object
+		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
+			return nil, err
+		}
+		exceptions = append(exceptions, &o)
+	}
+	return exceptions, nil
+}
+
+func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Object, exceptions []*storage.Object) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Store master event
+	if err := s.putObjectInTx(ctx, tx, master); err != nil {
+		return fmt.Errorf("failed to store master event: %w", err)
+	}
+
+	// Store all exceptions
+	for _, exception := range exceptions {
+		if err := s.putObjectInTx(ctx, tx, exception); err != nil {
+			return fmt.Errorf("failed to store exception: %w", err)
+		}
+	}
+
+	// Update calendar metadata
+	if err := updateCalendarCTagInTx(ctx, tx, master.CalendarID); err != nil {
+		return err
+	}
+
+	if err := recordChangeInTx(ctx, tx, master.CalendarID, master.UID, false); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Object) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO calendar_objects (
+			id, calendar_id, uid, etag, data, component, start_at, end_at
+		) VALUES (
+			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
+		)
+		ON CONFLICT (calendar_id, uid) DO UPDATE SET
+			etag = excluded.etag,
+			data = excluded.data,
+			component = excluded.component,
+			start_at = excluded.start_at,
+			end_at = excluded.end_at,
+			updated_at = now()
+	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
+	return err
+}
+
+func (s *Store) DeleteEventInstance(ctx context.Context, calendarID, uid string, recurrenceID *time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if recurrenceID == nil {
+		// Delete all instances including master and exceptions
+		_, err = tx.Exec(ctx, `
+			DELETE FROM calendar_objects 
+			WHERE calendar_id::text = $1 AND uid = $2
+		`, calendarID, uid)
+	} else {
+		// Delete specific exception instance
+		recIDStr := recurrenceID.Format("20060102T150405Z")
+		_, err = tx.Exec(ctx, `
+			DELETE FROM calendar_objects 
+			WHERE calendar_id::text = $1 AND uid = $2
+			AND (data LIKE '%RECURRENCE-ID%' || $3 || '%' OR data LIKE '%RECURRENCE-ID%' || $4 || '%')
+		`, calendarID, uid, recIDStr, recurrenceID.Format("20060102"))
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if err := updateCalendarCTagInTx(ctx, tx, calendarID); err != nil {
+		return err
+	}
+
+	if err := recordChangeInTx(ctx, tx, calendarID, uid, true); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 func updateCalendarCTagInTx(ctx context.Context, tx pgx.Tx, calendarID string) error {
 	ctag := uuid.Must(uuid.NewV7()).String()
 	_, err := tx.Exec(ctx, `

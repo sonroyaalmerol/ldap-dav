@@ -17,12 +17,13 @@ import (
 )
 
 type Handlers struct {
-	cfg      *config.Config
-	store    storage.Store
-	aclProv  acl.Provider
-	logger   zerolog.Logger
-	basePath string
-	expander *ical.RecurrenceExpander
+	cfg               *config.Config
+	store             storage.Store
+	aclProv           acl.Provider
+	logger            zerolog.Logger
+	basePath          string
+	expander          *ical.RecurrenceExpander
+	recurrenceManager *ical.RecurrenceManager
 }
 
 func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Directory, logger zerolog.Logger) *Handlers {
@@ -33,12 +34,13 @@ func NewHandlers(cfg *config.Config, store storage.Store, dir directory.Director
 	}
 
 	return &Handlers{
-		cfg:      cfg,
-		store:    store,
-		aclProv:  acl.NewLDAPACL(dir),
-		logger:   logger,
-		basePath: cfg.HTTP.BasePath,
-		expander: ical.NewRecurrenceExpander(tz),
+		cfg:               cfg,
+		store:             store,
+		aclProv:           acl.NewLDAPACL(dir),
+		logger:            logger,
+		basePath:          cfg.HTTP.BasePath,
+		expander:          ical.NewRecurrenceExpander(tz),
+		recurrenceManager: ical.NewRecurrenceManager(tz),
 	}
 }
 

@@ -10,14 +10,6 @@ import (
 	"github.com/emersion/go-ical"
 )
 
-func GenerateEventETag(event *Event) string {
-	if event.RecurrenceID != nil {
-		// For recurring instances, include recurrence ID in ETag
-		return event.UID + "-" + event.RecurrenceID.Format("20060102T150405Z")
-	}
-	return event.UID + "-" + event.Start.Format("20060102T150405Z")
-}
-
 func parseDateTime(s string) (time.Time, bool, error) {
 	s = strings.TrimSpace(s)
 
