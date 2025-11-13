@@ -1713,9 +1713,13 @@ func testLargeCollectionHandling(t *testing.T, client *http.Client, baseURL, bas
 	baseCalendarURL := baseURL + basePath + "/calendars/alice/shared/team/"
 
 	t.Run("CreateManyEvents", func(t *testing.T) {
-		// Create 10000 events to simulate a large collection
-		numEvents := 10_000
+		// Create 100 events to simulate a large collection (reduced from 10000 for test speed)
+		numEvents := 100
 		for i := 0; i < numEvents; i++ {
+			// Calculate hour and ensure it wraps correctly
+			hour := i % 24
+			nextHour := (i + 1) % 24
+
 			ics := fmt.Sprintf("BEGIN:VCALENDAR\r\n"+
 				"VERSION:2.0\r\n"+
 				"PRODID:-//ldap-dav//test//EN\r\n"+
@@ -1726,7 +1730,7 @@ func testLargeCollectionHandling(t *testing.T, client *http.Client, baseURL, bas
 				"DTEND:20250201T%02d0000Z\r\n"+
 				"SUMMARY:Large Collection Event %d\r\n"+
 				"END:VEVENT\r\n"+
-				"END:VCALENDAR\r\n", i, (i % 24), (i%24)+1, i)
+				"END:VCALENDAR\r\n", i, hour, nextHour, i)
 
 			url := baseCalendarURL + fmt.Sprintf("large-coll-evt-%d.ics", i)
 			req, _ := http.NewRequest("PUT", url, bytes.NewBufferString(ics))

@@ -132,7 +132,13 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse calendar
+	component, err := ical.DetectICSComponent(raw)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("unsupported calendar component in PUT")
+		http.Error(w, "unsupported calendar component", http.StatusUnsupportedMediaType)
+		return
+	}
+
 	events, err := ical.ParseCalendar(raw)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("failed to parse incoming calendar")
@@ -140,9 +146,53 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle non-VEVENT components (VTODO, VJOURNAL, etc.)
 	if len(events) == 0 {
-		h.logger.Error().Msg("no events found in calendar")
-		http.Error(w, "no events", http.StatusBadRequest)
+		if component == "VEVENT" {
+			h.logger.Error().Msg("no events found in VEVENT calendar")
+			http.Error(w, "no events", http.StatusBadRequest)
+			return
+		}
+
+		h.logger.Debug().Str("component", component).Msg("storing non-VEVENT component")
+
+		// Validate ETags
+		if !h.validateETags(r, existing, recurrenceID) {
+			http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+			return
+		}
+
+		// Store as raw object (non-VEVENT components don't support recurrence modifications)
+		obj := &storage.Object{
+			CalendarID: calendarID,
+			UID:        lookupUID,
+			Data:       string(raw),
+			Component:  component,
+		}
+
+		if err := h.store.PutObject(r.Context(), obj); err != nil {
+			h.logger.Error().Err(err).Msg("failed to store non-event object")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		storedObj, err := h.store.GetObject(r.Context(), calendarID, lookupUID)
+		if err != nil {
+			h.logger.Warn().Err(err).Msg("stored but failed to retrieve object")
+			if existing == nil {
+				w.WriteHeader(http.StatusCreated)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+			return
+		}
+
+		w.Header().Set("ETag", `"`+storedObj.ETag+`"`)
+		if existing == nil {
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
 		return
 	}
 
