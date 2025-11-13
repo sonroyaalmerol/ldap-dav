@@ -283,14 +283,28 @@ func SerializeEvent(event *Event) ([]byte, error) {
 			}
 		}
 
-		// RDATE (add as text since there's no direct method)
-		for _, rdate := range event.RDate {
-			vevent.Props.SetText("RDATE", rdate.Format("20060102T150405Z"))
+		// RDATE
+		if len(event.RDate) > 0 {
+			rdates := make([]string, len(event.RDate))
+			for i, rdate := range event.RDate {
+				rdates[i] = rdate.UTC().Format("20060102T150405Z")
+			}
+			vevent.Props.Add(&ical.Prop{
+				Name:  "RDATE",
+				Value: strings.Join(rdates, ","),
+			})
 		}
 
-		// EXDATE (add as text)
-		for _, exdate := range event.ExDate {
-			vevent.Props.SetText("EXDATE", exdate.Format("20060102T150405Z"))
+		// EXDATE
+		if len(event.ExDate) > 0 {
+			exdates := make([]string, len(event.ExDate))
+			for i, exdate := range event.ExDate {
+				exdates[i] = exdate.UTC().Format("20060102T150405Z")
+			}
+			vevent.Props.Add(&ical.Prop{
+				Name:  "EXDATE",
+				Value: strings.Join(exdates, ","),
+			})
 		}
 	}
 
