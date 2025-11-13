@@ -145,16 +145,20 @@ func (s *Store) UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color
 
 func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at, recurrence_id
 		FROM calendar_objects 
 		WHERE calendar_id::text = $1 AND uid = $2 
-		AND data NOT LIKE '%RECURRENCE-ID%'
+		AND recurrence_id IS NULL
 		LIMIT 1
 	`, calendarID, uid)
 
 	var o storage.Object
-	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
+	var recurrenceID sql.NullString
+	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt, &recurrenceID); err != nil {
 		return nil, err
+	}
+	if recurrenceID.Valid {
+		o.RecurrenceID = recurrenceID.String
 	}
 	return &o, nil
 }
@@ -168,9 +172,13 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 
 	// Extract RECURRENCE-ID to determine if this is master or exception
 	recurrenceID, err := utils.ExtractRecurrenceIDFromData(obj.Data)
-	isException := (err == nil && recurrenceID != nil)
+	var recIDStr sql.NullString
+	if err == nil && recurrenceID != nil {
+		recIDStr = sql.NullString{String: recurrenceID.String(), Valid: true}
+		obj.RecurrenceID = recurrenceID.String()
+	}
 
-	if err := s.putObjectInTx(ctx, tx, obj, isException); err != nil {
+	if err := s.putObjectInTx(ctx, tx, obj, recIDStr); err != nil {
 		return err
 	}
 
@@ -205,7 +213,7 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 			DELETE FROM calendar_objects 
 			WHERE calendar_id::text = $1 AND uid = $2 
 			AND etag = $3 
-			AND data NOT LIKE '%RECURRENCE-ID%'
+			AND recurrence_id IS NULL
 		`, calendarID, uid, etag)
 
 		if err == nil && cmdTag.RowsAffected() > 0 {
@@ -213,7 +221,7 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 			_, err = tx.Exec(ctx, `
 				DELETE FROM calendar_objects 
 				WHERE calendar_id::text = $1 AND uid = $2 
-				AND data LIKE '%RECURRENCE-ID%'
+				AND recurrence_id IS NOT NULL
 			`, calendarID, uid)
 		}
 	}
@@ -228,7 +236,7 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 			err := tx.QueryRow(ctx, `
 				SELECT etag FROM calendar_objects 
 				WHERE calendar_id::text = $1 AND uid = $2 
-				AND data NOT LIKE '%RECURRENCE-ID%'
+				AND recurrence_id IS NULL
 				LIMIT 1
 			`, calendarID, uid).Scan(&actualEtag)
 			if err == nil {
@@ -254,7 +262,7 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 
 func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, components []string, start *time.Time, end *time.Time) ([]*storage.Object, error) {
 	q := `
-		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+		select id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at, recurrence_id
 		from calendar_objects
 		where calendar_id::text = $1`
 	args := []any{calendarID}
@@ -283,8 +291,12 @@ func (s *Store) ListObjectsByComponent(ctx context.Context, calendarID string, c
 	var out []*storage.Object
 	for rows.Next() {
 		var o storage.Object
-		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
+		var recurrenceID sql.NullString
+		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt, &recurrenceID); err != nil {
 			return nil, err
+		}
+		if recurrenceID.Valid {
+			o.RecurrenceID = recurrenceID.String
 		}
 		out = append(out, &o)
 	}
@@ -336,10 +348,10 @@ func (s *Store) ListChangesSince(ctx context.Context, calendarID string, sinceSe
 
 func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*storage.Object, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at
+		SELECT id::text, calendar_id::text, uid, etag, data, component, start_at, end_at, updated_at, recurrence_id
 		FROM calendar_objects
 		WHERE calendar_id::text = $1 AND uid = $2
-		AND data LIKE '%RECURRENCE-ID%'
+		AND recurrence_id IS NOT NULL
 		ORDER BY start_at
 	`, calendarID, masterUID)
 	if err != nil {
@@ -350,27 +362,30 @@ func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID st
 	var exceptions []*storage.Object
 	for rows.Next() {
 		var o storage.Object
-		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
+		var recurrenceID sql.NullString
+		if err := rows.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt, &recurrenceID); err != nil {
 			return nil, err
+		}
+		if recurrenceID.Valid {
+			o.RecurrenceID = recurrenceID.String
 		}
 		exceptions = append(exceptions, &o)
 	}
 	return exceptions, nil
 }
 
-func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Object, isException bool) error {
+func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Object, recIDStr sql.NullString) error {
 	var existingID string
 	var query string
 
-	if isException {
+	if recIDStr.Valid {
 		query = `
 			SELECT id::text FROM calendar_objects 
 			WHERE calendar_id::text = $1 AND uid = $2 
-			AND data LIKE $3
+			AND recurrence_id = $3
 			LIMIT 1
 		`
-		recIDValue := utils.ExtractRecurrenceIDValue(obj.Data)
-		err := tx.QueryRow(ctx, query, obj.CalendarID, obj.UID, "%RECURRENCE-ID%"+recIDValue+"%").Scan(&existingID)
+		err := tx.QueryRow(ctx, query, obj.CalendarID, obj.UID, recIDStr.String).Scan(&existingID)
 		if err != nil && err != pgx.ErrNoRows {
 			return err
 		}
@@ -378,7 +393,7 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 		query = `
 			SELECT id::text FROM calendar_objects 
 			WHERE calendar_id::text = $1 AND uid = $2 
-			AND data NOT LIKE '%RECURRENCE-ID%'
+			AND recurrence_id IS NULL
 			LIMIT 1
 		`
 		err := tx.QueryRow(ctx, query, obj.CalendarID, obj.UID).Scan(&existingID)
@@ -397,18 +412,19 @@ func (s *Store) putObjectInTx(ctx context.Context, tx pgx.Tx, obj *storage.Objec
 
 	_, err := tx.Exec(ctx, `
 		INSERT INTO calendar_objects (
-			id, calendar_id, uid, etag, data, component, start_at, end_at
+			id, calendar_id, uid, etag, data, component, start_at, end_at, recurrence_id
 		) VALUES (
-			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8
+			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9
 		)
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (calendar_id, uid, COALESCE(recurrence_id, '')) DO UPDATE SET
 			etag = excluded.etag,
 			data = excluded.data,
 			component = excluded.component,
 			start_at = excluded.start_at,
 			end_at = excluded.end_at,
+			recurrence_id = excluded.recurrence_id,
 			updated_at = now()
-	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
+	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt, recIDStr)
 
 	return err
 }

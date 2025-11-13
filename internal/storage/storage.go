@@ -19,15 +19,16 @@ type Calendar struct {
 }
 
 type Object struct {
-	ID         string
-	CalendarID string
-	UID        string
-	ETag       string
-	Data       string
-	Component  string // VEVENT/VTODO
-	StartAt    *time.Time
-	EndAt      *time.Time
-	UpdatedAt  time.Time
+	ID           string
+	CalendarID   string
+	UID          string
+	ETag         string
+	Data         string
+	Component    string // VEVENT/VTODO
+	StartAt      *time.Time
+	EndAt        *time.Time
+	UpdatedAt    time.Time
+	RecurrenceID string
 }
 
 type Change struct {
