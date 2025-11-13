@@ -97,22 +97,6 @@ func (h *Handlers) HandleGet(w http.ResponseWriter, r *http.Request) {
 	h.writeObjectResponse(w, obj)
 }
 
-func (h *Handlers) serveObject(w http.ResponseWriter, r *http.Request, calendarID, uid string) {
-	obj, err := h.store.GetObject(r.Context(), calendarID, uid)
-	if err != nil {
-		h.logger.Error().Err(err).Str("calendarID", calendarID).Str("uid", uid).Msg("failed to get object in GET")
-		http.NotFound(w, r)
-		return
-	}
-
-	if etag := common.TrimQuotes(r.Header.Get("If-None-Match")); etag != "" && etag == obj.ETag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	h.writeObjectResponse(w, obj)
-}
-
 func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	owner, calURI, rest := splitResourcePath(r.URL.Path, h.basePath)
 	if owner == "" || len(rest) == 0 {

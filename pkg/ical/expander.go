@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -12,19 +11,72 @@ import (
 )
 
 type Event struct {
+	// Core identification
 	UID          string
-	Summary      string
-	Description  string
-	Start        time.Time
-	End          time.Time
-	Duration     time.Duration
-	IsAllDay     bool
-	IsRecurring  bool
-	RRule        string
-	RDates       []time.Time
-	ExDates      []time.Time
 	RecurrenceID *time.Time
-	RawData      []byte
+
+	// Time properties
+	Start    time.Time
+	End      time.Time
+	Duration time.Duration
+	IsAllDay bool
+
+	// Recurrence properties
+	IsRecurring bool
+	RRule       string
+	RDate       []time.Time // Renamed from RDates for consistency with RFC
+	ExDate      []time.Time // Renamed from ExDates for consistency with RFC
+
+	// Summary and content
+	Summary     string
+	Description string
+	Location    string
+
+	// Status and classification
+	Status string // TENTATIVE, CONFIRMED, CANCELLED
+	Class  string // PUBLIC, PRIVATE, CONFIDENTIAL
+	Transp string // TRANSPARENT, OPAQUE
+
+	// Versioning
+	Sequence     int
+	Created      time.Time
+	LastModified time.Time
+	DtStamp      time.Time
+
+	// Participants
+	Organizer string
+	Attendees []string
+
+	// Categories and metadata
+	Categories []string
+	URL        string
+	Priority   int
+
+	// Geographic
+	Geo string // Latitude;Longitude
+
+	// Resources
+	Resources []string
+
+	// Alarms
+	Alarms []Alarm
+
+	// Attachments
+	Attachments []string
+
+	// Raw data for fallback
+	RawData []byte
+}
+
+type Alarm struct {
+	Action      string        // DISPLAY, AUDIO, EMAIL
+	Trigger     time.Duration // Relative trigger (e.g., -15 minutes)
+	TriggerTime *time.Time    // Absolute trigger
+	Description string
+	Summary     string
+	Attendees   []string
+	Repeat      int
+	Duration    time.Duration
 }
 
 type RecurrenceExpander struct {
@@ -59,48 +111,6 @@ func ParseCalendar(data []byte) ([]*Event, error) {
 	}
 
 	return events, nil
-}
-
-func SerializeEvent(event *Event) ([]byte, error) {
-	if event.RawData != nil {
-		if event.RecurrenceID != nil {
-			return modifyEventInstance(event.RawData, event)
-		}
-		return event.RawData, nil
-	}
-
-	return createEventData(event)
-}
-
-func SerializeMultipleEvents(events []*Event) (string, error) {
-	var buf strings.Builder
-	buf.WriteString("BEGIN:VCALENDAR\r\n")
-	buf.WriteString("VERSION:2.0\r\n")
-	buf.WriteString("PRODID:-//ldap-dav//EN\r\n")
-
-	for _, event := range events {
-		eventData, err := SerializeEvent(event)
-		if err != nil {
-			return "", err
-		}
-		// Extract just the VEVENT portion (remove VCALENDAR wrapper)
-		lines := strings.Split(string(eventData), "\r\n")
-		inEvent := false
-		for _, line := range lines {
-			if strings.HasPrefix(line, "BEGIN:VEVENT") {
-				inEvent = true
-			}
-			if inEvent {
-				buf.WriteString(line + "\r\n")
-			}
-			if strings.HasPrefix(line, "END:VEVENT") {
-				inEvent = false
-			}
-		}
-	}
-
-	buf.WriteString("END:VCALENDAR\r\n")
-	return buf.String(), nil
 }
 
 func (re *RecurrenceExpander) ExpandRecurrences(events []*Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {
@@ -188,9 +198,9 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 		if err != nil {
 			continue
 		}
-		event.RDates = append(event.RDates, dates...)
+		event.RDate = append(event.RDate, dates...)
 	}
-	if len(event.RDates) > 0 {
+	if len(event.RDate) > 0 {
 		event.IsRecurring = true
 	}
 
@@ -200,7 +210,7 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 		if err != nil {
 			continue
 		}
-		event.ExDates = append(event.ExDates, dates...)
+		event.ExDate = append(event.ExDate, dates...)
 	}
 
 	if recID := comp.Props.Get(ical.PropRecurrenceID); recID != nil {
@@ -219,10 +229,14 @@ func (re *RecurrenceExpander) expandEvent(event *Event, rangeStart, rangeEnd tim
 	var instances []time.Time
 
 	if event.RRule != "" {
-		rruleStr := "DTSTART:" + event.Start.Format("20060102T150405Z") + "\nRRULE:" + event.RRule
-		rule, err := rrule.StrToRRule(rruleStr)
+		ropt, err := parseRRule(event.RRule, event.Start)
 		if err != nil {
 			return nil, fmt.Errorf("invalid RRULE: %w", err)
+		}
+
+		rule, err := rrule.NewRRule(*ropt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create rrule: %w", err)
 		}
 
 		extendedEnd := rangeEnd.Add(event.Duration)
@@ -230,9 +244,9 @@ func (re *RecurrenceExpander) expandEvent(event *Event, rangeStart, rangeEnd tim
 		instances = append(instances, occurrences...)
 	}
 
-	instances = append(instances, event.RDates...)
+	instances = append(instances, event.RDate...)
 
-	instances = filterExcludedDates(instances, event.ExDates)
+	instances = filterExcludedDates(instances, event.ExDate)
 
 	var filteredInstances []time.Time
 	for _, instance := range instances {

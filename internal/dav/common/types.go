@@ -315,12 +315,18 @@ type PropContainer struct {
 	Raw     []RawXMLValue `xml:",any"`
 }
 
+type ExpandElement struct {
+	Start string `xml:"start,attr"`
+	End   string `xml:"end,attr"`
+}
+
 type CalendarQuery struct {
 	XMLName xml.Name       `xml:"urn:ietf:params:xml:ns:caldav calendar-query"`
 	XmlnsD  string         `xml:"xmlns:D,attr,omitempty"`
 	XmlnsC  string         `xml:"xmlns:C,attr,omitempty"`
 	Prop    PropContainer  `xml:"DAV: prop"`
 	Filter  CalendarFilter `xml:"urn:ietf:params:xml:ns:caldav filter"`
+	Expand  *ExpandElement `xml:"urn:ietf:params:xml:ns:caldav calendar-data>expand"`
 }
 
 type CalendarMultiget struct {

@@ -61,13 +61,27 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 
 	var resps []common.Response
 
-	if start != nil && end != nil && common.ContainsComponent(comps, "VEVENT") {
-		resps = h.buildExpandedEventResponses(r.Context(), objs, *start, *end, props, owner, calURI)
-	} else {
-		for _, o := range objs {
-			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
-			resps = append(resps, buildReportResponse(hrefStr, props, o))
+	// Server-side recurrence expansion
+	if q.Expand != nil {
+		// Parse expand time range
+		expandStart, err := common.ParseICalTime(q.Expand.Start)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("invalid expand start time")
+			http.Error(w, "invalid expand start", http.StatusBadRequest)
+			return
 		}
+		expandEnd, err := common.ParseICalTime(q.Expand.End)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("invalid expand end time")
+			http.Error(w, "invalid expand end", http.StatusBadRequest)
+			return
+		}
+
+		// Return expanded instances
+		resps = h.buildExpandedEventResponses(r.Context(), objs, expandStart, expandEnd, props, owner, calURI)
+	} else {
+		// Return complete resources (master + exceptions)
+		resps = h.buildCompleteEventResponses(r.Context(), objs, props, owner, calURI)
 	}
 
 	ms := common.MultiStatus{Responses: resps}

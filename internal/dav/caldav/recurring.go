@@ -12,24 +12,67 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
+func (h *Handlers) buildCompleteEventResponses(ctx context.Context, objs []*storage.Object, props common.PropRequest, owner, calURI string) []common.Response {
+	var resps []common.Response
+
+	for _, o := range objs {
+		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
+
+		if o.Component == "VEVENT" {
+			exceptions, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
+
+			if len(exceptions) > 0 {
+				combinedData, err := h.combineEventWithExceptions(o, exceptions)
+				if err != nil {
+					h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to combine event with exceptions")
+					resps = append(resps, buildReportResponse(hrefStr, props, o))
+					continue
+				}
+
+				combinedObj := &storage.Object{
+					CalendarID: o.CalendarID,
+					UID:        o.UID,
+					Data:       combinedData,
+					Component:  o.Component,
+					ETag:       o.ETag,
+					UpdatedAt:  o.UpdatedAt,
+					StartAt:    o.StartAt,
+					EndAt:      o.EndAt,
+				}
+				resps = append(resps, buildReportResponse(hrefStr, props, combinedObj))
+			} else {
+				resps = append(resps, buildReportResponse(hrefStr, props, o))
+			}
+		} else {
+			resps = append(resps, buildReportResponse(hrefStr, props, o))
+		}
+	}
+
+	return resps
+}
+
+// buildExpandedEventResponses returns multiple responses per recurring event (one per instance)
 func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*storage.Object, start, end time.Time, props common.PropRequest, owner, calURI string) []common.Response {
 	var resps []common.Response
 
 	for _, o := range objs {
+		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
+
+		// Non-VEVENT components - return as-is
 		if o.Component != "VEVENT" {
-			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
 			resps = append(resps, buildReportResponse(hrefStr, props, o))
 			continue
 		}
 
+		// Parse the master event
 		events, err := ical.ParseCalendar([]byte(o.Data))
 		if err != nil {
 			h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to parse calendar object")
-			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
 			resps = append(resps, buildReportResponse(hrefStr, props, o))
 			continue
 		}
 
+		// Check if recurring
 		hasRecurrence := false
 		for _, event := range events {
 			if event.IsRecurring {
@@ -38,45 +81,57 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 			}
 		}
 
+		// Non-recurring - return single instance (still need to strip timezone and convert to UTC)
 		if !hasRecurrence {
-			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
-			resps = append(resps, buildReportResponse(hrefStr, props, o))
+			expandedEvent := h.convertEventToExpandedFormat(events[0])
+			instanceData, err := ical.SerializeEventWithoutTimezone(expandedEvent)
+			if err != nil {
+				h.logger.Warn().Err(err).Msg("failed to serialize non-recurring event")
+				resps = append(resps, buildReportResponse(hrefStr, props, o))
+				continue
+			}
+
+			instanceObj := &storage.Object{
+				CalendarID: o.CalendarID,
+				UID:        o.UID,
+				Data:       string(instanceData),
+				Component:  "VEVENT",
+				ETag:       o.ETag,
+				UpdatedAt:  o.UpdatedAt,
+				StartAt:    &expandedEvent.Start,
+				EndAt:      &expandedEvent.End,
+			}
+			resps = append(resps, buildReportResponse(hrefStr, props, instanceObj))
 			continue
 		}
 
-		// Get exceptions for this recurring event
+		// Expand recurrences
+		expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+		if err != nil || len(expandedEvents) == 0 {
+			h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to expand or no instances in range")
+			continue
+		}
+
+		// Get exceptions
 		exceptions, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
 		exceptionMap := make(map[string]*ical.Event)
-
 		for _, exc := range exceptions {
 			if excEvents, err := ical.ParseCalendar([]byte(exc.Data)); err == nil {
 				for _, excEvent := range excEvents {
 					if excEvent.RecurrenceID != nil {
-						key := excEvent.RecurrenceID.Format("20060102T150405Z")
+						key := excEvent.RecurrenceID.UTC().Format("20060102T150405Z")
 						exceptionMap[key] = excEvent
 					}
 				}
 			}
 		}
 
-		// Expand recurrences
-		expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
-		if err != nil {
-			h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to expand recurrences")
-			hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
-			resps = append(resps, buildReportResponse(hrefStr, props, o))
-			continue
-		}
-
-		// For each expanded instance, create a response with the instance data
-		// but the SAME href (standard CalDAV approach)
-		hrefStr := common.JoinURL(h.basePath, "calendars", owner, calURI, o.UID+".ics")
-
+		// Create one response per instance (RFC 4791 Section 7.8.3)
 		for _, event := range expandedEvents {
-			// Check if there's an explicit exception for this instance
+			// Use exception if it exists
 			var instanceEvent *ical.Event
 			if event.RecurrenceID != nil {
-				key := event.RecurrenceID.Format("20060102T150405Z")
+				key := event.RecurrenceID.UTC().Format("20060102T150405Z")
 				if exc, exists := exceptionMap[key]; exists {
 					instanceEvent = exc
 				} else {
@@ -86,31 +141,88 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 				instanceEvent = event
 			}
 
-			// Serialize this specific instance
-			instanceData, err := ical.SerializeEvent(instanceEvent)
+			// Convert to expanded format (RFC 4791 Section 7.9.1)
+			expandedInstance := h.convertEventToExpandedFormat(instanceEvent)
+
+			// Serialize without timezone info
+			instanceData, err := ical.SerializeEventWithoutTimezone(expandedInstance)
 			if err != nil {
-				h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to serialize event instance")
+				h.logger.Warn().Err(err).Msg("failed to serialize instance")
 				continue
 			}
 
-			// Create a temporary object for this instance
 			instanceObj := &storage.Object{
 				CalendarID: o.CalendarID,
 				UID:        o.UID,
 				Data:       string(instanceData),
 				Component:  "VEVENT",
-				ETag:       o.ETag, // Same ETag for all instances (same resource)
+				ETag:       o.ETag,
 				UpdatedAt:  o.UpdatedAt,
-				StartAt:    &instanceEvent.Start,
-				EndAt:      &instanceEvent.End,
+				StartAt:    &expandedInstance.Start,
+				EndAt:      &expandedInstance.End,
 			}
 
-			// Build response with SAME href for all instances
+			// Same href for all instances - this is correct per RFC 4791!
 			resps = append(resps, buildReportResponse(hrefStr, props, instanceObj))
 		}
 	}
 
 	return resps
+}
+
+// convertEventToExpandedFormat converts an event to expanded format per RFC 4791 Section 7.9.1:
+// - Remove recurrence properties (RRULE, RDATE, EXDATE, EXRULE)
+// - Convert all times to UTC
+// - Set RECURRENCE-ID for instances
+func (h *Handlers) convertEventToExpandedFormat(event *ical.Event) *ical.Event {
+	expanded := &ical.Event{
+		UID:          event.UID,
+		Summary:      event.Summary,
+		Description:  event.Description,
+		Location:     event.Location,
+		Status:       event.Status,
+		Class:        event.Class,
+		Transp:       event.Transp,
+		Sequence:     event.Sequence,
+		Created:      event.Created,
+		LastModified: event.LastModified,
+		DtStamp:      event.DtStamp,
+		Organizer:    event.Organizer,
+		Attendees:    event.Attendees,
+		Categories:   event.Categories,
+		URL:          event.URL,
+		Geo:          event.Geo,
+		Priority:     event.Priority,
+		Resources:    event.Resources,
+		Alarms:       event.Alarms,
+		Attachments:  event.Attachments,
+
+		// Convert times to UTC
+		Start: event.Start.UTC(),
+		End:   event.End.UTC(),
+
+		// Set RECURRENCE-ID if this is an instance
+		RecurrenceID: nil,
+
+		// Remove all recurrence properties
+		IsRecurring: false,
+		RRule:       "",
+		RDate:       nil,
+		ExDate:      nil,
+		// Note: EXRULE is deprecated in RFC 5545, so we don't need to handle it
+	}
+
+	// Set RECURRENCE-ID to original start time in UTC
+	if event.RecurrenceID != nil {
+		recID := event.RecurrenceID.UTC()
+		expanded.RecurrenceID = &recID
+	} else {
+		// For expanded instances from master, set RECURRENCE-ID to the instance start
+		recID := expanded.Start
+		expanded.RecurrenceID = &recID
+	}
+
+	return expanded
 }
 
 func (h *Handlers) combineEventWithExceptions(master *storage.Object, exceptions []*storage.Object) (string, error) {
