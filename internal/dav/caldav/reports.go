@@ -79,53 +79,12 @@ func (h *Handlers) ReportCalendarQuery(w http.ResponseWriter, r *http.Request, q
 func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request, mg common.CalendarMultiget) {
 	props := common.ParsePropRequest(mg.Prop)
 	var resps []common.Response
+
 	for _, hrefStr := range mg.Hrefs {
 		owner, calURI, rest := splitResourcePath(hrefStr, h.basePath)
 		if owner == "" || len(rest) == 0 {
 			continue
 		}
-
-		if h.isRecurringInstanceRequest(hrefStr) {
-			baseUID := h.extractBaseUIDFromHref(hrefStr)
-
-			calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
-			if err != nil {
-				h.logger.Debug().Err(err).
-					Str("owner", owner).
-					Str("calendar", calURI).
-					Msg("failed to resolve calendar in multiget")
-				continue
-			}
-
-			pr := common.MustPrincipal(r.Context())
-			okRead, err := h.aclCheckRead(r.Context(), pr, calURI, calOwner)
-			if err != nil || !okRead {
-				h.logger.Debug().Err(err).
-					Bool("can_read", okRead).
-					Str("user", pr.UserID).
-					Str("calendar", calURI).
-					Msg("ACL check failed in multiget")
-				continue
-			}
-
-			masterObj, err := h.store.GetObject(r.Context(), calendarID, baseUID)
-			if err != nil {
-				h.logger.Debug().Err(err).
-					Str("calendarID", calendarID).
-					Str("uid", baseUID).
-					Msg("failed to get master object for recurring instance")
-				continue
-			}
-
-			instanceResp := h.handleRecurringInstanceRequest(hrefStr, masterObj, props)
-			if instanceResp != nil {
-				resps = append(resps, *instanceResp)
-			}
-			continue
-		}
-
-		filename := rest[len(rest)-1]
-		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 		calendarID, calOwner, err := h.resolveCalendar(r.Context(), owner, calURI)
 		if err != nil {
@@ -146,6 +105,27 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 				Msg("ACL check failed in multiget")
 			continue
 		}
+
+		recurrenceID, baseUID := h.parseInstancePath(hrefStr)
+		if recurrenceID != nil {
+			masterObj, err := h.store.GetObject(r.Context(), calendarID, baseUID)
+			if err != nil {
+				h.logger.Debug().Err(err).
+					Str("calendarID", calendarID).
+					Str("uid", baseUID).
+					Msg("failed to get master object for recurring instance")
+				continue
+			}
+
+			instanceResp := h.handleRecurringInstanceRequest(hrefStr, masterObj, props)
+			if instanceResp != nil {
+				resps = append(resps, *instanceResp)
+			}
+			continue
+		}
+
+		filename := rest[len(rest)-1]
+		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 		o, err := h.store.GetObject(r.Context(), calendarID, uid)
 		if err != nil {
