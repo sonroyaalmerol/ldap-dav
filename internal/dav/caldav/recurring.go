@@ -241,28 +241,3 @@ func (h *Handlers) validateETags(r *http.Request, existing *storage.Object, recu
 
 	return true
 }
-
-func (h *Handlers) writeStoredEventResponse(w http.ResponseWriter, ctx context.Context, calendarID, uid string, recurrenceID *time.Time, isNew bool) {
-	storedObj, err := h.store.GetObject(ctx, calendarID, uid)
-	if err != nil {
-		h.logger.Warn().Err(err).Msg("stored but failed to retrieve object")
-		if isNew {
-			w.WriteHeader(http.StatusCreated)
-		} else {
-			w.WriteHeader(http.StatusNoContent)
-		}
-		return
-	}
-
-	responseETag := storedObj.ETag
-	if recurrenceID != nil {
-		responseETag = h.generateInstanceETag(storedObj.ETag, &ical.Event{RecurrenceID: recurrenceID})
-	}
-
-	w.Header().Set("ETag", `"`+responseETag+`"`)
-	if isNew {
-		w.WriteHeader(http.StatusCreated)
-	} else {
-		w.WriteHeader(http.StatusNoContent)
-	}
-}

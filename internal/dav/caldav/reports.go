@@ -106,24 +106,6 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 			continue
 		}
 
-		recurrenceID, baseUID := h.parseInstancePath(hrefStr)
-		if recurrenceID != nil {
-			masterObj, err := h.store.GetObject(r.Context(), calendarID, baseUID)
-			if err != nil {
-				h.logger.Debug().Err(err).
-					Str("calendarID", calendarID).
-					Str("uid", baseUID).
-					Msg("failed to get master object for recurring instance")
-				continue
-			}
-
-			instanceResp := h.handleRecurringInstanceRequest(hrefStr, masterObj, props)
-			if instanceResp != nil {
-				resps = append(resps, *instanceResp)
-			}
-			continue
-		}
-
 		filename := rest[len(rest)-1]
 		uid := strings.TrimSuffix(filename, filepath.Ext(filename))
 
@@ -136,7 +118,42 @@ func (h *Handlers) ReportCalendarMultiget(w http.ResponseWriter, r *http.Request
 			continue
 		}
 
-		resps = append(resps, buildReportResponse(hrefStr, props, o))
+		// Get exceptions if this is a recurring event
+		exceptions, err := h.store.GetEventExceptions(r.Context(), calendarID, uid)
+		if err != nil {
+			h.logger.Debug().Err(err).
+				Str("uid", uid).
+				Msg("failed to get exceptions in multiget, serving master only")
+			resps = append(resps, buildReportResponse(hrefStr, props, o))
+			continue
+		}
+
+		// If there are exceptions, combine them with the master
+		if len(exceptions) > 0 && o.Component == "VEVENT" {
+			combinedData, err := h.combineEventWithExceptions(o, exceptions)
+			if err != nil {
+				h.logger.Warn().Err(err).
+					Str("uid", uid).
+					Msg("failed to combine event with exceptions")
+				resps = append(resps, buildReportResponse(hrefStr, props, o))
+				continue
+			}
+
+			// Create a combined object for the response
+			combinedObj := &storage.Object{
+				CalendarID: o.CalendarID,
+				UID:        o.UID,
+				Data:       combinedData,
+				Component:  o.Component,
+				ETag:       o.ETag,
+				UpdatedAt:  o.UpdatedAt,
+				StartAt:    o.StartAt,
+				EndAt:      o.EndAt,
+			}
+			resps = append(resps, buildReportResponse(hrefStr, props, combinedObj))
+		} else {
+			resps = append(resps, buildReportResponse(hrefStr, props, o))
+		}
 	}
 
 	ms := common.MultiStatus{Responses: resps}
