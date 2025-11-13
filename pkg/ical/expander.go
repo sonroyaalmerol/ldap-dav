@@ -261,17 +261,37 @@ func (re *RecurrenceExpander) expandEvent(event *Event, rangeStart, rangeEnd tim
 	})
 
 	var expandedEvents []*Event
-	for i, instanceTime := range filteredInstances {
+	for _, instanceTime := range filteredInstances {
 		instanceEvent := &Event{
-			UID:          fmt.Sprintf("%s-%d", event.UID, i),
-			Summary:      event.Summary,
-			Description:  event.Description,
+			UID:          event.UID,
 			Start:        instanceTime,
 			End:          instanceTime.Add(event.Duration),
 			Duration:     event.Duration,
-			IsAllDay:     event.IsAllDay,
-			IsRecurring:  false,
 			RecurrenceID: &instanceTime,
+			IsRecurring:  false,
+			RRule:        "",
+			RDate:        nil,
+			ExDate:       nil,
+			Summary:      event.Summary,
+			Description:  event.Description,
+			Location:     event.Location,
+			Status:       event.Status,
+			Class:        event.Class,
+			Transp:       event.Transp,
+			IsAllDay:     event.IsAllDay,
+			Sequence:     event.Sequence,
+			Created:      event.Created,
+			LastModified: event.LastModified,
+			DtStamp:      event.DtStamp,
+			Organizer:    event.Organizer,
+			Attendees:    event.Attendees,
+			Categories:   event.Categories,
+			URL:          event.URL,
+			Geo:          event.Geo,
+			Priority:     event.Priority,
+			Resources:    event.Resources,
+			Alarms:       event.Alarms,
+			Attachments:  event.Attachments,
 			RawData:      event.RawData,
 		}
 		expandedEvents = append(expandedEvents, instanceEvent)
