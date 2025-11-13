@@ -220,14 +220,15 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 
 		if rowsAffected == 0 {
 			if etag != "" {
-				var exists bool
-				err := tx.QueryRow(`SELECT 1 FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid).Scan(&exists)
+				var actualEtag string
+				err := tx.QueryRow(`SELECT etag FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid).Scan(&actualEtag)
 				if err == sql.ErrNoRows {
 					return sql.ErrNoRows
 				}
-				if err == nil && exists {
-					return fmt.Errorf("etag mismatch")
+				if err != nil {
+					return err
 				}
+				return fmt.Errorf("etag mismatch: expected %s; got %s", etag, actualEtag)
 			}
 			return sql.ErrNoRows
 		}

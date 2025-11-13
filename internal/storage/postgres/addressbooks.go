@@ -170,14 +170,16 @@ func (s *Store) DeleteContact(ctx context.Context, addressbookID, uid string, et
 
 	if cmdTag.RowsAffected() == 0 {
 		if etag != "" {
-			// Check if contact exists
-			var exists bool
-			err := tx.QueryRow(ctx, `select exists(select 1 from contacts where addressbook_id::text = $1 and uid = $2)`, addressbookID, uid).Scan(&exists)
-			if err != nil {
-				return err
+			var actualEtag string
+			err := tx.QueryRow(ctx, `
+			select etag from contacts 
+			where addressbook_id::text = $1 and uid = $2
+		`, addressbookID, uid).Scan(&actualEtag)
+			if err == nil {
+				return fmt.Errorf("etag mismatch: expected %s; got %s", etag, actualEtag)
 			}
-			if exists {
-				return fmt.Errorf("etag mismatch")
+			if err != sql.ErrNoRows {
+				return err
 			}
 		}
 		return sql.ErrNoRows
