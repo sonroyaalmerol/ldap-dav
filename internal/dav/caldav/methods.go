@@ -213,7 +213,17 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 	var master *ical.Event
 	var exceptions []*ical.Event
 
-	for _, event := range events {
+	removeMe := true
+	for i, event := range events {
+		if removeMe {
+			h.logger.Debug().
+				Int("index", i).
+				Str("uid", event.UID).
+				Str("expected_uid", uid).
+				Interface("recurrence_id", event.RecurrenceID).
+				Msg("parsed event")
+			continue
+		}
 		if event.UID != "" && event.UID != uid {
 			h.logger.Error().
 				Str("expected_uid", uid).
@@ -234,6 +244,9 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			}
 			master = event
 		}
+	}
+	if removeMe {
+		return
 	}
 
 	// Handle case: Client sends only exception (modifying single instance)
