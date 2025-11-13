@@ -10,6 +10,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage/utils"
 )
 
 func (s *Store) CreateCalendar(c storage.Calendar, ownerGroup string, description string) error {
@@ -146,9 +147,15 @@ func (s *Store) UpdateCalendarColor(ctx context.Context, ownerUID, calURI, color
 }
 
 func (s *Store) GetObject(ctx context.Context, calendarID, uid string) (*storage.Object, error) {
+	// Get master event only (no RECURRENCE-ID in data)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, calendar_id, uid, etag, data, component, start_at, end_at, updated_at
-		FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid)
+		FROM calendar_objects 
+		WHERE calendar_id = ? AND uid = ? 
+		AND data NOT LIKE '%RECURRENCE-ID%'
+		LIMIT 1
+	`, calendarID, uid)
+
 	var o storage.Object
 	if err := row.Scan(&o.ID, &o.CalendarID, &o.UID, &o.ETag, &o.Data, &o.Component, &o.StartAt, &o.EndAt, &o.UpdatedAt); err != nil {
 		return nil, err
@@ -175,42 +182,78 @@ func (s *Store) PutObject(ctx context.Context, obj *storage.Object) error {
 }
 
 func (s *Store) putObjectInTx(tx *sql.Tx, obj *storage.Object) error {
-	// Check if object already exists to preserve ID
-	var existingID string
-	err := tx.QueryRow(`
-		SELECT id FROM calendar_objects 
-		WHERE calendar_id = ? AND uid = ?
-	`, obj.CalendarID, obj.UID).Scan(&existingID)
+	// Extract RECURRENCE-ID to determine if this is master or exception
+	recurrenceID, err := utils.ExtractRecurrenceIDFromData(obj.Data)
+	isException := (err == nil && recurrenceID != nil)
 
-	if err == nil {
-		// Object exists, use existing ID
+	var existingID string
+
+	if isException {
+		// Find existing exception by matching RECURRENCE-ID in data
+		recIDValue := utils.ExtractRecurrenceIDValue(obj.Data)
+		err := tx.QueryRow(`
+			SELECT id FROM calendar_objects 
+			WHERE calendar_id = ? AND uid = ? 
+			AND data LIKE ?
+			LIMIT 1
+		`, obj.CalendarID, obj.UID, "%RECURRENCE-ID%"+recIDValue+"%").Scan(&existingID)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+	} else {
+		// Master event: no RECURRENCE-ID
+		err := tx.QueryRow(`
+			SELECT id FROM calendar_objects 
+			WHERE calendar_id = ? AND uid = ? 
+			AND data NOT LIKE '%RECURRENCE-ID%'
+			LIMIT 1
+		`, obj.CalendarID, obj.UID).Scan(&existingID)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+	}
+
+	if existingID != "" {
 		obj.ID = existingID
-	} else if err != sql.ErrNoRows {
-		// Real error, not just "not found"
-		return err
 	} else if obj.ID == "" {
-		// New object, generate ID
 		obj.ID = uuid.Must(uuid.NewV7()).String()
 	}
 
-	// Always generate a new ETag for versioning
 	obj.ETag = uuid.Must(uuid.NewV7()).String()
 
+	// Try INSERT first
 	_, err = tx.Exec(`
 		INSERT INTO calendar_objects (
 			id, calendar_id, uid, etag, data, component, start_at, end_at
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?
 		)
-		ON CONFLICT(calendar_id, uid) DO UPDATE SET
-			etag = excluded.etag,
-			data = excluded.data,
-			component = excluded.component,
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			updated_at = datetime('now')
 	`, obj.ID, obj.CalendarID, obj.UID, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt)
-	return err
+
+	if err != nil {
+		// INSERT failed, try UPDATE
+		result, updateErr := tx.Exec(`
+			UPDATE calendar_objects SET
+				etag = ?,
+				data = ?,
+				component = ?,
+				start_at = ?,
+				end_at = ?,
+				updated_at = datetime('now')
+			WHERE id = ?
+		`, obj.ETag, obj.Data, obj.Component, obj.StartAt, obj.EndAt, obj.ID)
+
+		if updateErr != nil {
+			return updateErr
+		}
+
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			return fmt.Errorf("failed to insert or update object")
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) error {
@@ -218,14 +261,32 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 		var result sql.Result
 		var err error
 
+		// Delete ALL objects with this UID (master + exceptions)
 		if etag == "" {
 			result, err = tx.Exec(`
-				DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ?
+				DELETE FROM calendar_objects 
+				WHERE calendar_id = ? AND uid = ?
 			`, calendarID, uid)
 		} else {
+			// With ETag, only delete master first
 			result, err = tx.Exec(`
-				DELETE FROM calendar_objects WHERE calendar_id = ? AND uid = ? AND etag = ?
+				DELETE FROM calendar_objects 
+				WHERE calendar_id = ? AND uid = ? 
+				AND etag = ? 
+				AND data NOT LIKE '%RECURRENCE-ID%'
 			`, calendarID, uid, etag)
+
+			if err == nil {
+				rows, _ := result.RowsAffected()
+				if rows > 0 {
+					// Master deleted, now delete all exceptions
+					_, err = tx.Exec(`
+						DELETE FROM calendar_objects 
+						WHERE calendar_id = ? AND uid = ? 
+						AND data LIKE '%RECURRENCE-ID%'
+					`, calendarID, uid)
+				}
+			}
 		}
 
 		if err != nil {
@@ -240,7 +301,12 @@ func (s *Store) DeleteObject(ctx context.Context, calendarID, uid, etag string) 
 		if rowsAffected == 0 {
 			if etag != "" {
 				var actualEtag string
-				err := tx.QueryRow(`SELECT etag FROM calendar_objects WHERE calendar_id = ? AND uid = ?`, calendarID, uid).Scan(&actualEtag)
+				err := tx.QueryRow(`
+					SELECT etag FROM calendar_objects 
+					WHERE calendar_id = ? AND uid = ? 
+					AND data NOT LIKE '%RECURRENCE-ID%'
+					LIMIT 1
+				`, calendarID, uid).Scan(&actualEtag)
 				if err == sql.ErrNoRows {
 					return sql.ErrNoRows
 				}
@@ -404,31 +470,4 @@ func (s *Store) GetEventExceptions(ctx context.Context, calendarID, masterUID st
 		exceptions = append(exceptions, &o)
 	}
 	return exceptions, nil
-}
-
-func (s *Store) PutEventWithExceptions(ctx context.Context, master *storage.Object, exceptions []*storage.Object) error {
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		// Store master event
-		if err := s.putObjectInTx(tx, master); err != nil {
-			return fmt.Errorf("failed to store master event: %w", err)
-		}
-
-		// Store all exceptions
-		for _, exception := range exceptions {
-			if err := s.putObjectInTx(tx, exception); err != nil {
-				return fmt.Errorf("failed to store exception: %w", err)
-			}
-		}
-
-		// Update calendar metadata once for all changes
-		if err := s.updateCalendarCTagInTx(tx, master.CalendarID); err != nil {
-			return err
-		}
-
-		if err := s.recordChangeInTx(tx, master.CalendarID, master.UID, false); err != nil {
-			return err
-		}
-
-		return nil
-	})
 }

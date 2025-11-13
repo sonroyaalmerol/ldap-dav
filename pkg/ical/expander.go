@@ -287,3 +287,34 @@ func (re *RecurrenceExpander) eventOverlapsRange(event *Event, rangeStart, range
 func (re *RecurrenceExpander) timeRangeOverlaps(eventStart, eventEnd, rangeStart, rangeEnd time.Time) bool {
 	return eventStart.Before(rangeEnd) && eventEnd.After(rangeStart)
 }
+
+func AddExceptionDate(event *Event, recurrenceID time.Time) {
+	// Avoid duplicates
+	for _, existing := range event.ExDate {
+		if existing.Equal(recurrenceID) {
+			return
+		}
+	}
+	event.ExDate = append(event.ExDate, recurrenceID)
+}
+
+// RemoveExceptionDate removes a date from EXDATE list
+func RemoveExceptionDate(event *Event, recurrenceID time.Time) {
+	filtered := make([]time.Time, 0, len(event.ExDate))
+	for _, exdate := range event.ExDate {
+		if !exdate.Equal(recurrenceID) {
+			filtered = append(filtered, exdate)
+		}
+	}
+	event.ExDate = filtered
+}
+
+// HasExceptionDate checks if a date is in EXDATE
+func HasExceptionDate(event *Event, recurrenceID time.Time) bool {
+	for _, exdate := range event.ExDate {
+		if exdate.Equal(recurrenceID) {
+			return true
+		}
+	}
+	return false
+}

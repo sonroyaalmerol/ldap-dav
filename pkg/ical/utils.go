@@ -1,13 +1,10 @@
 package ical
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/emersion/go-ical"
 )
 
 func parseDateTime(s string) (time.Time, bool, error) {
@@ -122,141 +119,4 @@ func filterExcludedDates(instances, exdates []time.Time) []time.Time {
 	}
 
 	return filtered
-}
-
-func modifyEventInstance(rawData []byte, event *Event) ([]byte, error) {
-	cal, err := ical.NewDecoder(bytes.NewReader(rawData)).Decode()
-	if err != nil {
-		return nil, err
-	}
-
-	// Find the VEVENT component
-	var eventComp *ical.Component
-	for _, comp := range cal.Children {
-		if comp.Name == ical.CompEvent {
-			eventComp = comp
-			break
-		}
-	}
-
-	if eventComp == nil {
-		return nil, fmt.Errorf("no VEVENT component found")
-	}
-
-	// Update DTSTART
-	if dtstart := eventComp.Props.Get(ical.PropDateTimeStart); dtstart != nil {
-		if event.IsAllDay {
-			dtstart.Value = event.Start.Format("20060102")
-		} else {
-			dtstart.Value = event.Start.Format("20060102T150405Z")
-		}
-	}
-
-	// Update DTEND
-	if dtend := eventComp.Props.Get(ical.PropDateTimeEnd); dtend != nil {
-		if event.IsAllDay {
-			dtend.Value = event.End.Format("20060102")
-		} else {
-			dtend.Value = event.End.Format("20060102T150405Z")
-		}
-	}
-
-	// Update UID
-	if uid := eventComp.Props.Get(ical.PropUID); uid != nil {
-		uid.Value = event.UID
-	}
-
-	// Add RECURRENCE-ID if this is a recurrence instance
-	if event.RecurrenceID != nil {
-		recurrenceID := &ical.Prop{
-			Name: ical.PropRecurrenceID,
-		}
-		if event.IsAllDay {
-			recurrenceID.Value = event.RecurrenceID.Format("20060102")
-		} else {
-			recurrenceID.Value = event.RecurrenceID.Format("20060102T150405Z")
-		}
-		eventComp.Props.Set(recurrenceID)
-	}
-
-	// Remove RRULE, RDATE, EXDATE from instances as they don't repeat
-	if event.RecurrenceID != nil {
-		eventComp.Props.Del(ical.PropRecurrenceRule)
-		eventComp.Props.Del(ical.PropRecurrenceDates)
-		eventComp.Props.Del(ical.PropExceptionDates)
-	}
-
-	// Serialize back to iCal
-	var buf bytes.Buffer
-	enc := ical.NewEncoder(&buf)
-	if err := enc.Encode(cal); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func createEventData(event *Event) ([]byte, error) {
-	// Create a new calendar with basic properties
-	cal := &ical.Calendar{
-		Component: &ical.Component{
-			Name: ical.CompCalendar,
-			Props: ical.Props{
-				ical.PropVersion:   []ical.Prop{{Name: ical.PropVersion, Value: "2.0"}},
-				ical.PropProductID: []ical.Prop{{Name: ical.PropProductID, Value: "-//ldap-dav//EN"}},
-			},
-		},
-	}
-
-	// Create event component
-	eventComp := &ical.Component{
-		Name:  ical.CompEvent,
-		Props: make(ical.Props),
-	}
-
-	// Basic properties
-	eventComp.Props.Set(&ical.Prop{Name: ical.PropUID, Value: event.UID})
-	eventComp.Props.Set(&ical.Prop{Name: ical.PropDateTimeStamp, Value: time.Now().UTC().Format("20060102T150405Z")})
-
-	// DTSTART
-	if event.IsAllDay {
-		eventComp.Props.Set(&ical.Prop{Name: ical.PropDateTimeStart, Value: event.Start.Format("20060102")})
-	} else {
-		eventComp.Props.Set(&ical.Prop{Name: ical.PropDateTimeStart, Value: event.Start.Format("20060102T150405Z")})
-	}
-
-	// DTEND if we have duration
-	if event.Duration > 0 {
-		if event.IsAllDay {
-			eventComp.Props.Set(&ical.Prop{Name: ical.PropDateTimeEnd, Value: event.End.Format("20060102")})
-		} else {
-			eventComp.Props.Set(&ical.Prop{Name: ical.PropDateTimeEnd, Value: event.End.Format("20060102T150405Z")})
-		}
-	}
-
-	if event.Summary != "" {
-		eventComp.Props.Set(&ical.Prop{Name: ical.PropSummary, Value: event.Summary})
-	}
-
-	if event.Description != "" {
-		eventComp.Props.Set(&ical.Prop{Name: ical.PropDescription, Value: event.Description})
-	}
-
-	if event.RecurrenceID != nil {
-		if event.IsAllDay {
-			eventComp.Props.Set(&ical.Prop{Name: ical.PropRecurrenceID, Value: event.RecurrenceID.Format("20060102")})
-		} else {
-			eventComp.Props.Set(&ical.Prop{Name: ical.PropRecurrenceID, Value: event.RecurrenceID.Format("20060102T150405Z")})
-		}
-	}
-
-	cal.Children = []*ical.Component{eventComp}
-
-	var buf bytes.Buffer
-	enc := ical.NewEncoder(&buf)
-	if err := enc.Encode(cal); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
 }

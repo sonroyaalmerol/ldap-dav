@@ -12,6 +12,80 @@ import (
 	"github.com/sonroyaalmerol/ldap-dav/pkg/ical"
 )
 
+// handleExceptionOnlyPut handles PUT of just an exception (editing single instance)
+func (h *Handlers) handleExceptionOnlyPut(w http.ResponseWriter, r *http.Request, calendarID, uid string, exception *ical.Event, existing *storage.Object) error {
+	if exception.UID != uid {
+		return fmt.Errorf("UID mismatch: expected %s, got %s", uid, exception.UID)
+	}
+
+	if exception.RecurrenceID == nil {
+		return fmt.Errorf("exception must have RECURRENCE-ID")
+	}
+
+	// Ensure master event exists
+	if existing == nil {
+		return fmt.Errorf("master event not found")
+	}
+
+	// Get master to check if EXDATE needs to be removed
+	masterEvents, err := ical.ParseCalendar([]byte(existing.Data))
+	if err != nil {
+		return fmt.Errorf("failed to parse master: %w", err)
+	}
+
+	if len(masterEvents) == 0 {
+		return fmt.Errorf("no events in master")
+	}
+
+	masterEvent := masterEvents[0]
+
+	// If this recurrence was in EXDATE, remove it (we're "undeleting" it with a custom exception)
+	if ical.HasExceptionDate(masterEvent, *exception.RecurrenceID) {
+		ical.RemoveExceptionDate(masterEvent, *exception.RecurrenceID)
+
+		// Update master
+		updatedMasterData, err := ical.SerializeEvent(masterEvent)
+		if err != nil {
+			return fmt.Errorf("failed to serialize master: %w", err)
+		}
+
+		existing.Data = string(updatedMasterData)
+		if err := h.store.PutObject(r.Context(), existing); err != nil {
+			return fmt.Errorf("failed to update master: %w", err)
+		}
+	}
+
+	// Store the exception
+	if err := h.storeException(r.Context(), calendarID, uid, exception); err != nil {
+		return fmt.Errorf("failed to store exception: %w", err)
+	}
+
+	w.Header().Set("ETag", `"`+existing.ETag+`"`)
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// storeException stores a single exception instance
+func (h *Handlers) storeException(ctx context.Context, calendarID, uid string, exception *ical.Event) error {
+	data, err := ical.SerializeEvent(exception)
+	if err != nil {
+		return fmt.Errorf("failed to serialize exception: %w", err)
+	}
+
+	data, _ = ical.EnsureDTStamp(data)
+
+	obj := &storage.Object{
+		CalendarID: calendarID,
+		UID:        uid,
+		Data:       string(data),
+		Component:  "VEVENT",
+		StartAt:    &exception.Start,
+		EndAt:      &exception.End,
+	}
+
+	return h.store.PutObject(ctx, obj)
+}
+
 func (h *Handlers) buildCompleteEventResponses(ctx context.Context, objs []*storage.Object, props common.PropRequest, owner, calURI string) []common.Response {
 	var resps []common.Response
 

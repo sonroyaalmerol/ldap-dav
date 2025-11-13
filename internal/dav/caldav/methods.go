@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"context"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -208,7 +209,10 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate that all events have the same UID
+	// Separate master and exceptions
+	var master *ical.Event
+	var exceptions []*ical.Event
+
 	for _, event := range events {
 		if event.UID != "" && event.UID != uid {
 			h.logger.Error().
@@ -219,6 +223,48 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		event.UID = uid // Ensure UID matches URL
+
+		if event.RecurrenceID != nil {
+			exceptions = append(exceptions, event)
+		} else {
+			if master != nil {
+				h.logger.Error().Msg("multiple master events in single PUT")
+				http.Error(w, "multiple master events", http.StatusBadRequest)
+				return
+			}
+			master = event
+		}
+	}
+
+	// Handle case: Client sends only exception (modifying single instance)
+	if master == nil && len(exceptions) == 1 {
+		if err := h.handleExceptionOnlyPut(w, r, calendarID, uid, exceptions[0], existing); err != nil {
+			h.logger.Error().Err(err).Msg("failed to handle exception-only PUT")
+			http.Error(w, "failed to store exception", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Handle case: Client sends only exception(s) without master - need to check if master exists
+	if master == nil && len(exceptions) > 0 {
+		if existing == nil {
+			h.logger.Error().Msg("cannot create exceptions without master event")
+			http.Error(w, "master event required", http.StatusBadRequest)
+			return
+		}
+
+		// Store exceptions only
+		for _, exception := range exceptions {
+			if err := h.storeException(r.Context(), calendarID, uid, exception); err != nil {
+				h.logger.Error().Err(err).Msg("failed to store exception")
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.Header().Set("ETag", `"`+existing.ETag+`"`)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	// Validate ETags
@@ -227,7 +273,7 @@ func (h *Handlers) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store all events (master + exceptions) together
+	// Store master + exceptions
 	if err := h.storeEvents(r.Context(), calendarID, events); err != nil {
 		h.logger.Error().Err(err).Msg("failed to store events")
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -299,7 +345,34 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get the existing object
+	// Check if client is deleting specific instance via query parameter or X-CALDAV-RECURRENCE-ID header
+	var recurrenceID *time.Time
+
+	// Try query parameter first: ?recurrence-id=20250115T100000Z
+	if recIDStr := r.URL.Query().Get("recurrence-id"); recIDStr != "" {
+		t, err := common.ParseICalTime(recIDStr)
+		if err != nil {
+			h.logger.Error().Err(err).Str("recurrence-id", recIDStr).Msg("invalid recurrence-id in query")
+			http.Error(w, "invalid recurrence-id", http.StatusBadRequest)
+			return
+		}
+		recurrenceID = &t
+	}
+
+	// Try custom header: X-CALDAV-RECURRENCE-ID: 20250115T100000Z
+	if recurrenceID == nil {
+		if recIDStr := r.Header.Get("X-CALDAV-RECURRENCE-ID"); recIDStr != "" {
+			t, err := common.ParseICalTime(recIDStr)
+			if err != nil {
+				h.logger.Error().Err(err).Str("recurrence-id", recIDStr).Msg("invalid recurrence-id in header")
+				http.Error(w, "invalid recurrence-id", http.StatusBadRequest)
+				return
+			}
+			recurrenceID = &t
+		}
+	}
+
+	// Get the existing object (master event)
 	existing, err := h.store.GetObject(r.Context(), calendarID, uid)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("object not found")
@@ -308,19 +381,128 @@ func (h *Handlers) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate ETag
-	if !h.validateETags(r, existing, nil) {
+	if !h.validateETags(r, existing, recurrenceID) {
 		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
 		return
 	}
 
-	// Delete the entire event (master + all exceptions)
-	if err := h.deleteEntireEvent(r.Context(), calendarID, uid); err != nil {
-		h.logger.Error().Err(err).Str("uid", uid).Msg("failed to delete event")
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
+	if recurrenceID != nil {
+		// Delete single instance by adding EXDATE or deleting exception
+		if err := h.deleteSingleInstance(r.Context(), calendarID, uid, *recurrenceID); err != nil {
+			if err == sql.ErrNoRows {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error().Err(err).Str("uid", uid).Msg("failed to delete instance")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Delete entire event (master + all exceptions)
+		if err := h.deleteEntireEvent(r.Context(), calendarID, uid); err != nil {
+			if err == sql.ErrNoRows {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error().Err(err).Str("uid", uid).Msg("failed to delete event")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteSingleInstance handles deletion of a single recurring instance
+func (h *Handlers) deleteSingleInstance(ctx context.Context, calendarID, uid string, recurrenceID time.Time) error {
+	exceptions, err := h.store.GetEventExceptions(ctx, calendarID, uid)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("failed to get exceptions")
+	}
+
+	exceptionExists := false
+	for _, exc := range exceptions {
+		excEvents, err := ical.ParseCalendar([]byte(exc.Data))
+		if err != nil {
+			continue
+		}
+		for _, excEvent := range excEvents {
+			if excEvent.RecurrenceID != nil && excEvent.RecurrenceID.Equal(recurrenceID) {
+				exceptionExists = true
+				// Delete the exception object
+				if err := h.store.DeleteObject(ctx, calendarID, exc.UID, ""); err != nil {
+					return fmt.Errorf("failed to delete exception: %w", err)
+				}
+				break
+			}
+		}
+		if exceptionExists {
+			break
+		}
+	}
+
+	master, err := h.store.GetObject(ctx, calendarID, uid)
+	if err != nil {
+		return fmt.Errorf("failed to get master event: %w", err)
+	}
+
+	events, err := ical.ParseCalendar([]byte(master.Data))
+	if err != nil {
+		return fmt.Errorf("failed to parse master event: %w", err)
+	}
+
+	if len(events) == 0 {
+		return fmt.Errorf("no events found in master")
+	}
+
+	masterEvent := events[0]
+
+	if !masterEvent.IsRecurring {
+		// Non-recurring event, can't delete single instance
+		return fmt.Errorf("cannot delete instance of non-recurring event")
+	}
+
+	ical.AddExceptionDate(masterEvent, recurrenceID)
+
+	updatedData, err := ical.SerializeEvent(masterEvent)
+	if err != nil {
+		return fmt.Errorf("failed to serialize updated event: %w", err)
+	}
+
+	master.Data = string(updatedData)
+	master.StartAt = &masterEvent.Start
+	master.EndAt = &masterEvent.End
+
+	if err := h.store.PutObject(ctx, master); err != nil {
+		return fmt.Errorf("failed to update master event: %w", err)
+	}
+
+	h.logger.Debug().
+		Str("uid", uid).
+		Time("recurrence_id", recurrenceID).
+		Bool("had_exception", exceptionExists).
+		Msg("deleted single instance via EXDATE")
+
+	return nil
+}
+
+// deleteEntireEvent deletes the master event and all exceptions
+func (h *Handlers) deleteEntireEvent(ctx context.Context, calendarID, uid string) error {
+	// Step 1: Get all exceptions
+	exceptions, err := h.store.GetEventExceptions(ctx, calendarID, uid)
+	if err != nil {
+		h.logger.Warn().Err(err).Str("uid", uid).Msg("failed to get exceptions before delete")
+	}
+
+	// Step 2: Delete all exceptions first
+	for _, exc := range exceptions {
+		if err := h.store.DeleteObject(ctx, calendarID, exc.UID, ""); err != nil {
+			h.logger.Warn().Err(err).Str("exception_uid", exc.UID).Msg("failed to delete exception")
+		}
+	}
+
+	// Step 3: Delete master event
+	return h.store.DeleteObject(ctx, calendarID, uid, "")
 }
 
 func (h *Handlers) deleteCalendar(w http.ResponseWriter, owner, calURI string, pr *auth.Principal) {
@@ -342,21 +524,6 @@ func (h *Handlers) deleteCalendar(w http.ResponseWriter, owner, calURI string, p
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handlers) deleteEntireEvent(ctx context.Context, calendarID, uid string) error {
-	exceptions, err := h.store.GetEventExceptions(ctx, calendarID, uid)
-	if err != nil {
-		h.logger.Warn().Err(err).Str("uid", uid).Msg("failed to get exceptions before delete")
-	}
-
-	for _, exc := range exceptions {
-		if err := h.store.DeleteObject(ctx, calendarID, exc.UID, ""); err != nil {
-			h.logger.Warn().Err(err).Str("uid", exc.UID).Msg("failed to delete exception")
-		}
-	}
-
-	return h.store.DeleteObject(ctx, calendarID, uid, "")
 }
 
 func (h *Handlers) calendarExists(ctx context.Context, owner, uri string) bool {
@@ -608,9 +775,6 @@ func (h *Handlers) storeEvents(ctx context.Context, calendarID string, events []
 		return nil
 	}
 
-	var master *storage.Object
-	var exceptions []*storage.Object
-
 	for _, event := range events {
 		data, err := ical.SerializeEvent(event)
 		if err != nil {
@@ -621,7 +785,7 @@ func (h *Handlers) storeEvents(ctx context.Context, calendarID string, events []
 
 		component, err := ical.DetectICSComponent(data)
 		if err != nil {
-			h.logger.Warn().Err(err).Msg("failed to detect component type, defaulting to VEVENT")
+			h.logger.Warn().Err(err).Msg("failed to detect component type")
 			component = "VEVENT"
 		}
 
@@ -634,22 +798,9 @@ func (h *Handlers) storeEvents(ctx context.Context, calendarID string, events []
 			EndAt:      &event.End,
 		}
 
-		if event.RecurrenceID != nil {
-			exceptions = append(exceptions, obj)
-		} else {
-			master = obj
-		}
-	}
-
-	if master != nil && len(exceptions) > 0 {
-		return h.store.PutEventWithExceptions(ctx, master, exceptions)
-	} else if master != nil {
-		return h.store.PutObject(ctx, master)
-	} else if len(exceptions) > 0 {
-		for _, exc := range exceptions {
-			if err := h.store.PutObject(ctx, exc); err != nil {
-				return err
-			}
+		// PutObject will handle master vs exception based on RECURRENCE-ID
+		if err := h.store.PutObject(ctx, obj); err != nil {
+			return err
 		}
 	}
 

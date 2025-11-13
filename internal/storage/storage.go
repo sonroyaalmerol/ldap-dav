@@ -76,7 +76,6 @@ type Store interface {
 
 	// Recurrence handlers
 	GetEventExceptions(ctx context.Context, calendarID, masterUID string) ([]*Object, error)
-	PutEventWithExceptions(ctx context.Context, master *Object, exceptions []*Object) error
 
 	CreateAddressbook(a Addressbook, ownerGroup string, description string) error
 	DeleteAddressbook(ownerUserID, abURI string) error
