@@ -44,6 +44,13 @@ func (r *Router) setupRoutes() http.Handler {
 
 	mux.HandleFunc("/healthz", r.handleHealth)
 
+	if r.auth.OAuthEnabled() {
+		oauthHandler := r.auth.GetOAuthHandler()
+		mux.HandleFunc("/oauth/login", oauthHandler.InitiateOAuthFlow)
+		mux.HandleFunc("/oauth/callback", oauthHandler.HandleOAuthCallback)
+		mux.HandleFunc("/oauth/logout", r.handleOAuthLogout)
+	}
+
 	base := r.getBasePath()
 	mux.HandleFunc(base, r.handleDAVRequest)
 
@@ -205,7 +212,37 @@ func (r *Router) determineServiceType(req *http.Request) string {
 	return "caldav"
 }
 
+func (r *Router) handleOAuthLogout(w http.ResponseWriter, req *http.Request) {
+	cookie, err := req.Cookie("dav_session")
+	if err == nil && cookie.Value != "" {
+		if oauthHandler := r.auth.GetOAuthHandler(); oauthHandler != nil {
+			oauthHandler.Logout(cookie.Value)
+		}
+	}
+
+	// Clear cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "dav_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("logged out"))
+}
+
 func (r *Router) authenticate(req *http.Request) (*auth.Principal, error) {
+	// Try session cookie first (OAuth)
+	if r.auth.OAuthEnabled() {
+		if cookie, err := req.Cookie("dav_session"); err == nil && cookie.Value != "" {
+			if p, err := r.auth.OAuthSessionAuthenticate(req.Context(), cookie.Value); err == nil {
+				return p, nil
+			}
+		}
+	}
+
 	authz := req.Header.Get("Authorization")
 	lower := strings.ToLower(authz)
 

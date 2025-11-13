@@ -147,14 +147,145 @@ Notes:
 - `URI` defaults to a slug of `NAME` if not provided.
 
 ### Authentication
+
+#### Basic Authentication Methods
+
 - `AUTH_BASIC`: Enable HTTP Basic auth (default `"true"`)
 - `AUTH_BEARER`: Enable Bearer token auth (default `"true"`)
-- `AUTH_JWKS_URL`: JWKS endpoint URL for JWT validation (cached)
-- `AUTH_ISSUER`: Expected JWT issuer (optional)
-- `AUTH_AUDIENCE`: Expected JWT audience (optional)
+
+#### JWT Bearer Token Configuration
+
+- `AUTH_JWKS_URL`: JWKS endpoint URL for JWT validation (cached for 10 minutes)
+- `AUTH_ISSUER`: Expected JWT issuer claim validation (optional)
+- `AUTH_AUDIENCE`: Expected JWT audience claim validation (optional)
+
+#### Opaque Token Configuration
+
 - `AUTH_ALLOW_OPAQUE`: Allow opaque token introspection (default `"false"`)
 - `AUTH_INTROSPECT_URL`: RFC 7662 token introspection endpoint (optional)
 - `AUTH_INTROSPECT_AUTH`: Authorization header for introspection requests
+
+#### OAuth 2.0 Configuration
+
+- `AUTH_OAUTH`: Enable OAuth 2.0 authentication (default `"false"`)
+- `AUTH_OAUTH_CLIENT_ID`: OAuth client ID (required when OAuth enabled)
+- `AUTH_OAUTH_CLIENT_SECRET`: OAuth client secret (optional for public clients)
+- `AUTH_OAUTH_AUTH_URL`: OAuth authorization endpoint URL
+- `AUTH_OAUTH_TOKEN_URL`: OAuth token endpoint URL
+- `AUTH_OAUTH_USERINFO_URL`: OAuth userinfo endpoint URL (for user profile)
+- `AUTH_OAUTH_REDIRECT_URI`: OAuth callback URL (default `"http://localhost:8080/oauth/callback"`)
+- `AUTH_OAUTH_SCOPE`: OAuth scope request (default `"openid profile email"`)
+  - Add `offline_access` for refresh token support
+- `AUTH_OAUTH_SUBJECT_CLAIM`: Claim to use as username (default `"preferred_username"`)
+- `AUTH_OAUTH_SESSION_TTL`: Session lifetime in seconds (default `86400` - 24 hours)
+- `AUTH_OAUTH_SECURE_COOKIE`: Require HTTPS for session cookies (default `"true"`)
+
+#### OAuth Token Refresh
+
+- `AUTH_OAUTH_ENABLE_REFRESH`: Enable automatic token refresh (default `"true"`)
+- `AUTH_OAUTH_REFRESH_THRESHOLD`: Refresh tokens when they have less than N seconds remaining (default `300` - 5 minutes)
+
+#### OAuth Endpoints
+
+When OAuth is enabled, the following endpoints are available:
+
+- `/oauth/login` - Initiates OAuth authorization flow with PKCE
+- `/oauth/callback` - OAuth callback handler (set as redirect URI)
+- `/oauth/logout` - Invalidates the current session
+
+#### OAuth Flow
+
+1. **Login**: Navigate to `/oauth/login` to start authentication
+2. **Callback**: User is redirected back after authorization
+3. **Session**: A secure HTTP-only cookie (`dav_session`) is created
+4. **Auto-refresh**: Tokens are automatically refreshed before expiry
+5. **Logout**: Call `/oauth/logout` to terminate the session
+
+#### Authentication Priority
+
+When multiple authentication methods are enabled, the server checks credentials in this order:
+
+1. **OAuth Session Cookie** - If `AUTH_OAUTH=true` and valid session cookie present
+2. **Bearer Token** - If `Authorization: Bearer <token>` header present and `AUTH_BEARER=true`
+3. **HTTP Basic** - If `Authorization: Basic <credentials>` header present and `AUTH_BASIC=true`
+
+#### Example OAuth Configurations
+
+##### Keycloak
+
+```bash
+AUTH_OAUTH=true
+AUTH_OAUTH_CLIENT_ID=caldav-client
+AUTH_OAUTH_CLIENT_SECRET=your-client-secret
+AUTH_OAUTH_AUTH_URL=https://keycloak.example.com/realms/myrealm/protocol/openid-connect/auth
+AUTH_OAUTH_TOKEN_URL=https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token
+AUTH_OAUTH_USERINFO_URL=https://keycloak.example.com/realms/myrealm/protocol/openid-connect/userinfo
+AUTH_OAUTH_REDIRECT_URI=https://caldav.example.com/oauth/callback
+AUTH_OAUTH_SCOPE="openid profile email offline_access"
+AUTH_OAUTH_SUBJECT_CLAIM=preferred_username
+```
+
+##### Azure AD / Entra ID
+
+```bash
+AUTH_OAUTH=true
+AUTH_OAUTH_CLIENT_ID=your-application-id
+AUTH_OAUTH_CLIENT_SECRET=your-client-secret
+AUTH_OAUTH_AUTH_URL=https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize
+AUTH_OAUTH_TOKEN_URL=https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+AUTH_OAUTH_USERINFO_URL=https://graph.microsoft.com/oidc/userinfo
+AUTH_OAUTH_REDIRECT_URI=https://caldav.example.com/oauth/callback
+AUTH_OAUTH_SCOPE="openid profile email offline_access"
+AUTH_OAUTH_SUBJECT_CLAIM=preferred_username
+```
+
+##### Google
+
+```bash
+AUTH_OAUTH=true
+AUTH_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+AUTH_OAUTH_CLIENT_SECRET=your-client-secret
+AUTH_OAUTH_AUTH_URL=https://accounts.google.com/o/oauth2/v2/auth
+AUTH_OAUTH_TOKEN_URL=https://oauth2.googleapis.com/token
+AUTH_OAUTH_USERINFO_URL=https://openidconnect.googleapis.com/v1/userinfo
+AUTH_OAUTH_REDIRECT_URI=https://caldav.example.com/oauth/callback
+AUTH_OAUTH_SCOPE="openid profile email"
+AUTH_OAUTH_SUBJECT_CLAIM=email
+AUTH_OAUTH_ENABLE_REFRESH=true
+```
+
+##### Authentik
+
+```bash
+AUTH_OAUTH=true
+AUTH_OAUTH_CLIENT_ID=your-client-id
+AUTH_OAUTH_CLIENT_SECRET=your-client-secret
+AUTH_OAUTH_AUTH_URL=https://authentik.example.com/application/o/authorize/
+AUTH_OAUTH_TOKEN_URL=https://authentik.example.com/application/o/token/
+AUTH_OAUTH_USERINFO_URL=https://authentik.example.com/application/o/userinfo/
+AUTH_OAUTH_REDIRECT_URI=https://caldav.example.com/oauth/callback
+AUTH_OAUTH_SCOPE="openid profile email offline_access"
+AUTH_OAUTH_SUBJECT_CLAIM=preferred_username
+```
+
+#### Security Notes
+
+- **PKCE**: OAuth flow uses PKCE (Proof Key for Code Exchange) for enhanced security
+- **State Parameter**: Random state values prevent CSRF attacks
+- **Secure Cookies**: Set `AUTH_OAUTH_SECURE_COOKIE=true` in production (requires HTTPS)
+- **Token Storage**: Access and refresh tokens are stored server-side only
+- **Session Management**: Sessions are automatically cleaned up after TTL expires
+- **Concurrent Refresh Protection**: Mutex locks prevent race conditions during token refresh
+
+#### Token Mapping
+
+The OAuth implementation maps OAuth user subjects to LDAP users using:
+
+- `LDAP_TOKEN_USER_ATTR`: LDAP attribute to match against OAuth subject (default `"uid"`)
+
+Ensure your LDAP directory has the appropriate attribute set for OAuth users. For example:
+- If `AUTH_OAUTH_SUBJECT_CLAIM=email`, then `LDAP_TOKEN_USER_ATTR` should be `mail`
+- If `AUTH_OAUTH_SUBJECT_CLAIM=preferred_username`, then `LDAP_TOKEN_USER_ATTR` should be `uid`
 
 ### Storage
 - `STORAGE_TYPE`: `postgres|sqlite` (default `"postgres"`)

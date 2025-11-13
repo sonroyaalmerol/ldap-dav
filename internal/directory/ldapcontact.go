@@ -124,7 +124,7 @@ func (c *LDAPContactClient) ListContacts(ctx context.Context) ([]Contact, error)
 	for _, e := range res.Entries {
 		out = append(out, c.mapEntry(e))
 	}
-	c.cache.Set("all", out, time.Now().Add(30*time.Second))
+	c.cache.SetWithExpiry("all", out, time.Now().Add(30*time.Second))
 	return out, nil
 }
 

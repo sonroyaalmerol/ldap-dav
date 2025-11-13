@@ -36,6 +36,7 @@ type Chain struct {
 	logger zerolog.Logger
 	basic  *BasicAuth
 	bearer *BearerAuth
+	oauth  *OAuthAuth
 }
 
 func NewChain(cfg *config.Config, dir directory.Directory, logger zerolog.Logger) *Chain {
@@ -50,11 +51,15 @@ func NewChain(cfg *config.Config, dir directory.Directory, logger zerolog.Logger
 	if cfg.Auth.EnableBearer {
 		c.bearer = NewBearerAuth(cfg, dir, logger)
 	}
+	if cfg.Auth.EnableOAuth {
+		c.oauth = NewOAuthAuth(cfg, dir, logger)
+	}
 	return c
 }
 
 func (c *Chain) BasicEnabled() bool  { return c.basic != nil }
 func (c *Chain) BearerEnabled() bool { return c.bearer != nil }
+func (c *Chain) OAuthEnabled() bool  { return c.oauth != nil }
 
 func (c *Chain) BasicAuthenticate(ctx context.Context, header string) (*Principal, error) {
 	if c.basic == nil {
@@ -68,4 +73,15 @@ func (c *Chain) BearerAuthenticate(ctx context.Context, token string) (*Principa
 		return nil, errors.New("bearer disabled")
 	}
 	return c.bearer.Authenticate(ctx, token)
+}
+
+func (c *Chain) OAuthSessionAuthenticate(ctx context.Context, sessionID string) (*Principal, error) {
+	if c.oauth == nil {
+		return nil, errors.New("oauth disabled")
+	}
+	return c.oauth.AuthenticateSession(ctx, sessionID)
+}
+
+func (c *Chain) GetOAuthHandler() *OAuthAuth {
+	return c.oauth
 }

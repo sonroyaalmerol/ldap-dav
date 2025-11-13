@@ -86,7 +86,7 @@ func (b *BearerAuth) Authenticate(ctx context.Context, token string) (*Principal
 				return nil, err
 			}
 			p := &Principal{UserID: user.UID, UserDN: user.DN, Display: user.DisplayName}
-			b.verCache.Set(token, p, time.Now().Add(2*time.Minute))
+			b.verCache.SetWithExpiry(token, p, time.Now().Add(2*time.Minute))
 			return p, nil
 		}
 	}

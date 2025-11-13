@@ -64,14 +64,27 @@ type LDAPConfig struct {
 }
 
 type AuthConfig struct {
-	EnableBasic          bool
-	EnableBearer         bool
-	JWKSURL              string
-	Issuer               string
-	Audience             string
-	AllowOpaque          bool
-	IntrospectURL        string
-	IntrospectAuthHeader string
+	EnableBasic           bool
+	EnableBearer          bool
+	EnableOAuth           bool
+	JWKSURL               string
+	Issuer                string
+	Audience              string
+	AllowOpaque           bool
+	IntrospectURL         string
+	IntrospectAuthHeader  string
+	OAuthClientID         string
+	OAuthClientSecret     string
+	OAuthAuthURL          string
+	OAuthTokenURL         string
+	OAuthUserInfoURL      string
+	OAuthRedirectURI      string
+	OAuthScope            string
+	OAuthSubjectClaim     string
+	OAuthSessionTTL       int
+	OAuthSecureCookie     bool
+	OAuthEnableRefresh    bool
+	OAuthRefreshThreshold int
 }
 
 type StorageConfig struct {
@@ -211,14 +224,27 @@ func Load() (*Config, error) {
 			AddressbookFilters: loadAddressbookFilters(),
 		},
 		Auth: AuthConfig{
-			EnableBasic:          getenv("AUTH_BASIC", "true") == "true",
-			EnableBearer:         getenv("AUTH_BEARER", "true") == "true",
-			JWKSURL:              getenv("AUTH_JWKS_URL", ""),
-			Issuer:               getenv("AUTH_ISSUER", ""),
-			Audience:             getenv("AUTH_AUDIENCE", ""),
-			AllowOpaque:          getenv("AUTH_ALLOW_OPAQUE", "false") == "true",
-			IntrospectURL:        getenv("AUTH_INTROSPECT_URL", ""),
-			IntrospectAuthHeader: getenv("AUTH_INTROSPECT_AUTH", ""),
+			EnableBasic:           getenv("AUTH_BASIC", "true") == "true",
+			EnableBearer:          getenv("AUTH_BEARER", "true") == "true",
+			EnableOAuth:           getenv("AUTH_OAUTH", "false") == "true",
+			JWKSURL:               getenv("AUTH_JWKS_URL", ""),
+			Issuer:                getenv("AUTH_ISSUER", ""),
+			Audience:              getenv("AUTH_AUDIENCE", ""),
+			AllowOpaque:           getenv("AUTH_ALLOW_OPAQUE", "false") == "true",
+			IntrospectURL:         getenv("AUTH_INTROSPECT_URL", ""),
+			IntrospectAuthHeader:  getenv("AUTH_INTROSPECT_AUTH", ""),
+			OAuthClientID:         getenv("AUTH_OAUTH_CLIENT_ID", ""),
+			OAuthClientSecret:     getenv("AUTH_OAUTH_CLIENT_SECRET", ""),
+			OAuthAuthURL:          getenv("AUTH_OAUTH_AUTH_URL", ""),
+			OAuthTokenURL:         getenv("AUTH_OAUTH_TOKEN_URL", ""),
+			OAuthUserInfoURL:      getenv("AUTH_OAUTH_USERINFO_URL", ""),
+			OAuthRedirectURI:      getenv("AUTH_OAUTH_REDIRECT_URI", "http://localhost:8080/oauth/callback"),
+			OAuthScope:            getenv("AUTH_OAUTH_SCOPE", "openid profile email"),
+			OAuthSubjectClaim:     getenv("AUTH_OAUTH_SUBJECT_CLAIM", "preferred_username"),
+			OAuthSessionTTL:       func() int { v := getenv("AUTH_OAUTH_SESSION_TTL", "3600"); n, _ := strconv.Atoi(v); return n }(),
+			OAuthSecureCookie:     getenv("AUTH_OAUTH_SECURE_COOKIE", "true") == "true",
+			OAuthEnableRefresh:    getenv("AUTH_OAUTH_ENABLE_REFRESH", "true") == "true",
+			OAuthRefreshThreshold: func() int { v := getenv("AUTH_OAUTH_REFRESH_THRESHOLD", "300"); n, _ := strconv.Atoi(v); return n }(),
 		},
 		Storage: StorageConfig{
 			Type:        getenv("STORAGE_TYPE", "postgres"), // postgres | sqlite

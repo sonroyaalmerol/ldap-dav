@@ -267,7 +267,7 @@ func (l *LDAPClient) UserGroupsACL(ctx context.Context, user *User) ([]GroupACL,
 			}
 		}
 	}
-	l.cache.Set(user.DN, acls, time.Now().Add(l.cfg.CacheTTL))
+	l.cache.SetWithExpiry(user.DN, acls, time.Now().Add(l.cfg.CacheTTL))
 	return acls, nil
 }
 
