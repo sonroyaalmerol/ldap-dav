@@ -177,7 +177,11 @@ func SerializeEvent(event *Event) ([]byte, error) {
 
 	// RECURRENCE-ID
 	if event.RecurrenceID != nil {
-		vevent.Props.SetDateTime(ical.PropRecurrenceID, *event.RecurrenceID)
+		if event.IsAllDay {
+			vevent.Props.SetDate(ical.PropRecurrenceID, *event.RecurrenceID)
+		} else {
+			vevent.Props.SetDateTime(ical.PropRecurrenceID, *event.RecurrenceID)
+		}
 	}
 
 	// DTSTAMP (required)

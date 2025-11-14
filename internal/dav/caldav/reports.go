@@ -1,6 +1,7 @@
 package caldav
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -358,7 +359,7 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	busy := h.buildBusyIntervals(objs, start, end)
+	busy := h.buildBusyIntervals(r.Context(), objs, start, end)
 
 	icsData := common.BuildFreeBusyICS(start, end, busy, h.cfg.ICS.BuildProdID())
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
@@ -367,7 +368,7 @@ func (h *Handlers) ReportFreeBusyQuery(w http.ResponseWriter, r *http.Request, f
 	}
 }
 
-func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Time) []ical.Interval {
+func (h *Handlers) buildBusyIntervals(ctx context.Context, objs []*storage.Object, start, end time.Time) []ical.Interval {
 	var busy []ical.Interval
 
 	for _, o := range objs {
@@ -380,44 +381,44 @@ func (h *Handlers) buildBusyIntervals(objs []*storage.Object, start, end time.Ti
 			h.logger.Debug().Err(err).
 				Str("uid", o.UID).
 				Msg("failed to parse calendar, using fallback interval if available")
-			if interval := h.extractFallbackInterval(o, start, end); interval != nil {
-				busy = append(busy, *interval)
+			if iv := h.extractFallbackInterval(o, start, end); iv != nil {
+				busy = append(busy, *iv)
 			}
 			continue
 		}
 
-		// Check if any event is recurring
-		hasRecurrence := false
-		for _, event := range events {
-			if event.IsRecurring {
-				hasRecurrence = true
+		recurring := false
+		for _, ev := range events {
+			if ev.IsRecurring {
+				recurring = true
 				break
 			}
 		}
 
-		if hasRecurrence {
-			// Expand recurring events
-			expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+		if recurring {
+			excObjs, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
+			insts, err := h.expander.ExpandRecurrencesWithExceptions(
+				events, excObjs, start, end,
+			)
 			if err != nil {
 				h.logger.Debug().Err(err).
 					Str("uid", o.UID).
-					Msg("failed to expand recurrences, using fallback interval if available")
-				if interval := h.extractFallbackInterval(o, start, end); interval != nil {
-					busy = append(busy, *interval)
+					Msg("failed to expand recurrences, using fallback")
+				if iv := h.extractFallbackInterval(o, start, end); iv != nil {
+					busy = append(busy, *iv)
 				}
 				continue
 			}
 
-			for _, event := range expandedEvents {
-				if interval := h.eventToInterval(event, start, end); interval != nil {
-					busy = append(busy, *interval)
+			for _, ev := range insts {
+				if iv := h.eventToInterval(ev, start, end); iv != nil {
+					busy = append(busy, *iv)
 				}
 			}
 		} else {
-			// Non-recurring events - use directly
-			for _, event := range events {
-				if interval := h.eventToInterval(event, start, end); interval != nil {
-					busy = append(busy, *interval)
+			for _, ev := range events {
+				if iv := h.eventToInterval(ev, start, end); iv != nil {
+					busy = append(busy, *iv)
 				}
 			}
 		}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-ical"
+	"github.com/sonroyaalmerol/ldap-dav/internal/storage"
 	"github.com/teambition/rrule-go"
 )
 
@@ -113,23 +114,150 @@ func ParseCalendar(data []byte) ([]*Event, error) {
 	return events, nil
 }
 
-func (re *RecurrenceExpander) ExpandRecurrences(events []*Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {
-	var expandedEvents []*Event
+func (re *RecurrenceExpander) ExpandRecurrencesWithExceptions(masterEvents []*Event, exceptionObjs []*storage.Object, rangeStart, rangeEnd time.Time) ([]*Event, error) {
+	if len(masterEvents) == 0 {
+		return nil, nil
+	}
 
-	for _, event := range events {
-		if !event.IsRecurring {
-			if re.eventOverlapsRange(event, rangeStart, rangeEnd) {
-				expandedEvents = append(expandedEvents, event)
-			}
+	masterEvent := masterEvents[0]
+
+	// Parse exception events
+	exceptionMap := make(map[string]*Event) // key: UTC timestamp of RECURRENCE-ID
+	for _, excObj := range exceptionObjs {
+		excEvents, err := ParseCalendar([]byte(excObj.Data))
+		if err != nil {
 			continue
 		}
-
-		instances, err := re.expandEvent(event, rangeStart, rangeEnd)
-		if err != nil {
-			continue // Skip events that fail to expand
+		for _, excEvent := range excEvents {
+			if excEvent.RecurrenceID != nil {
+				key := excEvent.RecurrenceID.UTC().Format("20060102T150405Z")
+				exceptionMap[key] = excEvent
+			}
 		}
-		expandedEvents = append(expandedEvents, instances...)
 	}
+
+	// If not recurring, just return the master (unless it's an exception-only scenario)
+	if !masterEvent.IsRecurring {
+		if len(exceptionMap) == 0 {
+			if re.eventOverlapsRange(masterEvent, rangeStart, rangeEnd) {
+				return []*Event{masterEvent}, nil
+			}
+			return nil, nil
+		}
+		// Has exceptions but no RRULE - unusual but return exceptions in range
+		var results []*Event
+		for _, exc := range exceptionMap {
+			if re.eventOverlapsRange(exc, rangeStart, rangeEnd) {
+				results = append(results, exc)
+			}
+		}
+		return results, nil
+	}
+
+	// Expand the recurrence rule
+	var instances []time.Time
+
+	if masterEvent.RRule != "" {
+		ropt, err := parseRRule(masterEvent.RRule, masterEvent.Start)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RRULE: %w", err)
+		}
+
+		rule, err := rrule.NewRRule(*ropt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create rrule: %w", err)
+		}
+
+		// Extend range to catch events that might overlap
+		extendedEnd := rangeEnd.Add(masterEvent.Duration)
+		occurrences := rule.Between(rangeStart.Add(-masterEvent.Duration), extendedEnd, true)
+		instances = append(instances, occurrences...)
+	}
+
+	// Add RDATE instances
+	instances = append(instances, masterEvent.RDate...)
+
+	// Remove EXDATE instances FIRST (before checking exceptions)
+	instances = filterExcludedDates(instances, masterEvent.ExDate)
+
+	// Build final list: use exception if exists, otherwise use generated instance
+	var expandedEvents []*Event
+	seenInstances := make(map[string]bool) // Deduplicate
+
+	for _, instanceTime := range instances {
+		key := instanceTime.UTC().Format("20060102T150405Z")
+
+		// Skip duplicates
+		if seenInstances[key] {
+			continue
+		}
+		seenInstances[key] = true
+
+		var finalEvent *Event
+
+		// Check if there's an exception for this instance
+		if exc, hasException := exceptionMap[key]; hasException {
+			// Use the exception (which has custom data)
+			finalEvent = exc
+			delete(exceptionMap, key) // Mark as processed
+		} else {
+			// Generate instance from master
+			eventEnd := instanceTime.Add(masterEvent.Duration)
+
+			// Check if in range
+			if !re.timeRangeOverlaps(instanceTime, eventEnd, rangeStart, rangeEnd) {
+				continue
+			}
+
+			finalEvent = &Event{
+				UID:          masterEvent.UID,
+				Start:        instanceTime,
+				End:          eventEnd,
+				Duration:     masterEvent.Duration,
+				RecurrenceID: &instanceTime,
+				IsRecurring:  false,
+				RRule:        "",
+				RDate:        nil,
+				ExDate:       nil,
+				Summary:      masterEvent.Summary,
+				Description:  masterEvent.Description,
+				Location:     masterEvent.Location,
+				Status:       masterEvent.Status,
+				Class:        masterEvent.Class,
+				Transp:       masterEvent.Transp,
+				IsAllDay:     masterEvent.IsAllDay,
+				Sequence:     masterEvent.Sequence,
+				Created:      masterEvent.Created,
+				LastModified: masterEvent.LastModified,
+				DtStamp:      masterEvent.DtStamp,
+				Organizer:    masterEvent.Organizer,
+				Attendees:    masterEvent.Attendees,
+				Categories:   masterEvent.Categories,
+				URL:          masterEvent.URL,
+				Geo:          masterEvent.Geo,
+				Priority:     masterEvent.Priority,
+				Resources:    masterEvent.Resources,
+				Alarms:       masterEvent.Alarms,
+				Attachments:  masterEvent.Attachments,
+				RawData:      masterEvent.RawData,
+			}
+		}
+
+		expandedEvents = append(expandedEvents, finalEvent)
+	}
+
+	// Add any exceptions that didn't match an RRULE instance (thisandfuture edits, standalone exceptions)
+	for key, exc := range exceptionMap {
+		if !seenInstances[key] && re.eventOverlapsRange(exc, rangeStart, rangeEnd) {
+			expandedEvents = append(expandedEvents, exc)
+			seenInstances[key] = true
+		}
+	}
+
+	// Sort by start time
+	sort.Slice(expandedEvents, func(i, j int) bool {
+		return expandedEvents[i].Start.Before(expandedEvents[j].Start)
+	})
 
 	return expandedEvents, nil
 }
@@ -223,81 +351,6 @@ func parseEvent(comp *ical.Component, originalData []byte) (*Event, error) {
 	event.RawData = originalData
 
 	return event, nil
-}
-
-func (re *RecurrenceExpander) expandEvent(event *Event, rangeStart, rangeEnd time.Time) ([]*Event, error) {
-	var instances []time.Time
-
-	if event.RRule != "" {
-		ropt, err := parseRRule(event.RRule, event.Start)
-		if err != nil {
-			return nil, fmt.Errorf("invalid RRULE: %w", err)
-		}
-
-		rule, err := rrule.NewRRule(*ropt)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create rrule: %w", err)
-		}
-
-		extendedEnd := rangeEnd.Add(event.Duration)
-		occurrences := rule.Between(rangeStart.Add(-event.Duration), extendedEnd, true)
-		instances = append(instances, occurrences...)
-	}
-
-	instances = append(instances, event.RDate...)
-
-	instances = filterExcludedDates(instances, event.ExDate)
-
-	var filteredInstances []time.Time
-	for _, instance := range instances {
-		eventEnd := instance.Add(event.Duration)
-		if re.timeRangeOverlaps(instance, eventEnd, rangeStart, rangeEnd) {
-			filteredInstances = append(filteredInstances, instance)
-		}
-	}
-
-	sort.Slice(filteredInstances, func(i, j int) bool {
-		return filteredInstances[i].Before(filteredInstances[j])
-	})
-
-	var expandedEvents []*Event
-	for _, instanceTime := range filteredInstances {
-		instanceEvent := &Event{
-			UID:          event.UID,
-			Start:        instanceTime,
-			End:          instanceTime.Add(event.Duration),
-			Duration:     event.Duration,
-			RecurrenceID: &instanceTime,
-			IsRecurring:  false,
-			RRule:        "",
-			RDate:        nil,
-			ExDate:       nil,
-			Summary:      event.Summary,
-			Description:  event.Description,
-			Location:     event.Location,
-			Status:       event.Status,
-			Class:        event.Class,
-			Transp:       event.Transp,
-			IsAllDay:     event.IsAllDay,
-			Sequence:     event.Sequence,
-			Created:      event.Created,
-			LastModified: event.LastModified,
-			DtStamp:      event.DtStamp,
-			Organizer:    event.Organizer,
-			Attendees:    event.Attendees,
-			Categories:   event.Categories,
-			URL:          event.URL,
-			Geo:          event.Geo,
-			Priority:     event.Priority,
-			Resources:    event.Resources,
-			Alarms:       event.Alarms,
-			Attachments:  event.Attachments,
-			RawData:      event.RawData,
-		}
-		expandedEvents = append(expandedEvents, instanceEvent)
-	}
-
-	return expandedEvents, nil
 }
 
 func (re *RecurrenceExpander) eventOverlapsRange(event *Event, rangeStart, rangeEnd time.Time) bool {

@@ -155,7 +155,6 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 			}
 		}
 
-		// Non-recurring - return single instance (still need to strip timezone and convert to UTC)
 		if !hasRecurrence {
 			expandedEvent := h.convertEventToExpandedFormat(events[0])
 			instanceData, err := ical.SerializeEventWithoutTimezone(expandedEvent)
@@ -179,44 +178,20 @@ func (h *Handlers) buildExpandedEventResponses(ctx context.Context, objs []*stor
 			continue
 		}
 
-		// Expand recurrences
-		expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
+		// Get exceptions
+		exceptions, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
+
+		// Expand recurrences with proper exception and EXDATE handling
+		expandedEvents, err := h.expander.ExpandRecurrencesWithExceptions(events, exceptions, start, end)
 		if err != nil || len(expandedEvents) == 0 {
 			h.logger.Warn().Err(err).Str("uid", o.UID).Msg("failed to expand or no instances in range")
 			continue
 		}
 
-		// Get exceptions
-		exceptions, _ := h.store.GetEventExceptions(ctx, o.CalendarID, o.UID)
-		exceptionMap := make(map[string]*ical.Event)
-		for _, exc := range exceptions {
-			if excEvents, err := ical.ParseCalendar([]byte(exc.Data)); err == nil {
-				for _, excEvent := range excEvents {
-					if excEvent.RecurrenceID != nil {
-						key := excEvent.RecurrenceID.UTC().Format("20060102T150405Z")
-						exceptionMap[key] = excEvent
-					}
-				}
-			}
-		}
-
 		// Create one response per instance (RFC 4791 Section 7.8.3)
 		for _, event := range expandedEvents {
-			// Use exception if it exists
-			var instanceEvent *ical.Event
-			if event.RecurrenceID != nil {
-				key := event.RecurrenceID.UTC().Format("20060102T150405Z")
-				if exc, exists := exceptionMap[key]; exists {
-					instanceEvent = exc
-				} else {
-					instanceEvent = event
-				}
-			} else {
-				instanceEvent = event
-			}
-
 			// Convert to expanded format (RFC 4791 Section 7.9.1)
-			expandedInstance := h.convertEventToExpandedFormat(instanceEvent)
+			expandedInstance := h.convertEventToExpandedFormat(event)
 
 			// Serialize without timezone info
 			instanceData, err := ical.SerializeEventWithoutTimezone(expandedInstance)
@@ -320,41 +295,6 @@ func (h *Handlers) combineEventWithExceptions(master *storage.Object, exceptions
 	return ical.SerializeMultipleEvents(allEvents)
 }
 
-func (h *Handlers) expandSingleInstance(masterObj *storage.Object, recurrenceID *time.Time) *ical.Event {
-	events, err := ical.ParseCalendar([]byte(masterObj.Data))
-	if err != nil {
-		return nil
-	}
-
-	hasRecurrence := false
-	for _, event := range events {
-		if event.IsRecurring {
-			hasRecurrence = true
-			break
-		}
-	}
-
-	if !hasRecurrence {
-		return nil
-	}
-
-	start := recurrenceID.Add(-24 * time.Hour)
-	end := recurrenceID.Add(24 * time.Hour)
-
-	expandedEvents, err := h.expander.ExpandRecurrences(events, start, end)
-	if err != nil {
-		return nil
-	}
-
-	for _, event := range expandedEvents {
-		if event.RecurrenceID != nil && event.RecurrenceID.Equal(*recurrenceID) {
-			return event
-		}
-	}
-
-	return nil
-}
-
 func (h *Handlers) generateInstanceETag(baseETag string, event *ical.Event) string {
 	if event.RecurrenceID != nil {
 		return baseETag + "-" + event.RecurrenceID.Format("20060102T150405Z")
@@ -414,14 +354,31 @@ func (h *Handlers) validateETags(r *http.Request, existing *storage.Object, recu
 
 	if match != "" && existing != nil {
 		if recurrenceID != nil {
-			// Validate instance ETag
-			event := h.expandSingleInstance(existing, recurrenceID)
-			if event != nil {
-				instanceETag := h.generateInstanceETag(existing.ETag, event)
-				return instanceETag == match
+			masterEvents, err := ical.ParseCalendar([]byte(existing.Data))
+			if err != nil || len(masterEvents) == 0 {
+				return false
 			}
-			return existing.ETag == match
+
+			excObjs, _ := h.store.GetEventExceptions(r.Context(), existing.CalendarID, existing.UID)
+
+			insts, err := h.expander.ExpandRecurrencesWithExceptions(
+				masterEvents,
+				excObjs,
+				recurrenceID.Add(-1*time.Second),
+				recurrenceID.Add(1*time.Second),
+			)
+			if err != nil {
+				return false
+			}
+
+			for _, ev := range insts {
+				if ev.RecurrenceID != nil && ev.RecurrenceID.Equal(*recurrenceID) {
+					instETag := h.generateInstanceETag(existing.ETag, ev)
+					return instETag == match
+				}
+			}
 		}
+
 		return existing.ETag == match
 	}
 

@@ -11,6 +11,11 @@ func (h *Handlers) HandleWellKnown(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Expose-Headers", "Dav, Content-Type, Content-Range, Content-Language, Date, Content-Length, Content-Encoding, Etag, Last-Modified")
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 
+	if r.Method == http.MethodOptions {
+		h.HandleOptions(w, r)
+		return
+	}
+
 	// Redirect to base path per RFC 6764
 	http.Redirect(w, r, h.basePath+"/", http.StatusPermanentRedirect)
 }
