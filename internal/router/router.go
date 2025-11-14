@@ -86,6 +86,11 @@ func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
 func (r *Router) handleDAVRequest(w http.ResponseWriter, req *http.Request) {
 	capabilities := r.buildDAVCapabilities()
 	w.Header().Set("DAV", capabilities)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, PROPFIND, MKCOL, MKCALENDAR, REPORT")
+	w.Header().Set("Access-Control-Allow-Headers", "If-Match, If-None-Match, If-Modified-Since, Depth, Content-Type, Content-Range, Content-Language, Date, Content-Length, Content-Encoding")
+	w.Header().Set("Access-Control-Expose-Headers", "Dav, Content-Type, Content-Range, Content-Language, Date, Content-Length, Content-Encoding, Etag, Last-Modified")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	// OPTIONS is public for capability discovery
 	if req.Method == http.MethodOptions {
